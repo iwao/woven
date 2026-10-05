@@ -13,11 +13,11 @@ python3 scripts/import_sample_assets.py
 python3 -m http.server 4173 --bind 127.0.0.1
 ```
 
-Open `http://localhost:4173`. The X axis is the complete Artist population.
-The Y axis has two layers: Work-mediated Artist co-occurrences and a semantically
-ordered Work field. The prototype accumulates Artist-by-entity crosses as the
-year control advances. Density comes from the growing cross count, while relation
-weight is encoded by gold brightness. Semantic zoom switches the Work layer
-between overview clusters, intermediate clusters, and individual Works. It also
+Open `http://localhost:4173`. The X axis is the complete Artist population and
+semantic zoom switches it between overview clusters, intermediate clusters, and
+individual Artists. The Y axis has two non-compressed entity layers:
+Work-mediated related Artists and individual Works. The prototype accumulates
+Artist-by-entity crosses as the year control advances. Density comes from the
+growing cross count, while relation weight is encoded by gold brightness. It also
 provides Artist focus and relation inspection,
 and offers an opt-in Web Audio beat.

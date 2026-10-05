@@ -12,14 +12,14 @@
         <div><p class="eyebrow">CLASSII × WOVEN / PROTOTYPE</p><h1>WOVEN</h1></div>
         <div class="header-actions"><button id="sound" aria-pressed="false">Sound off</button><span id="scope"></span></div>
       </header>
-      <section class="intro"><p>Artists form the X axis. The Y axis has two layers: related Artists, then related Works. Each illuminated cross identifies one relation; accumulated weight appears as brightness.</p></section>
+      <section class="intro"><p>Artists form the X axis and semantic zoom compresses only that source-Artist column. The Y axis has two individual-entity layers: related Artists, then Works. Each illuminated cross identifies one relation; accumulated weight appears as brightness.</p></section>
       <section class="controls" aria-label="WOVEN controls">
         <label>Artist <select id="artist"><option value="all">All artists</option></select></label>
         <label class="year-control">Year <input id="year" type="range" /><output id="year-value"></output></label>
         <label class="zoom-control">Semantic zoom <input id="zoom" type="range" min="0" max="2" step="1" /><output id="zoom-value"></output></label>
       </section>
       <section class="fabric-wrap"><canvas id="fabric" aria-label="Artist relation temporal field"></canvas><div class="legend"><span></span> Artist × Artist / Artist × Work crosses · brighter = greater relation weight · click a cross</div></section>
-      <section class="detail" id="detail"><p class="detail-kicker">ARTIST-FIRST FABRIC</p><h2>Artist × related entity</h2><p>The Y axis first shows Work-mediated Artist co-occurrences, then Work relations. Time accumulates relation crosses; their total weight is encoded as brightness.</p></section>
+      <section class="detail" id="detail"><p class="detail-kicker">ARTIST-FIRST FABRIC</p><h2>Artist × related entity</h2><p>Semantic zoom aggregates source Artists on X only. Related Artists and Works remain individual entities on Y.</p></section>
       <footer><span id="metrics"></span><span>Sample asset · no live database connection</span></footer>
     </main>
     <script type="module" src="/src/app.js"></script>

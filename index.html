@@ -18,7 +18,7 @@
         <label class="year-control">Year <input id="year" type="range" /><output id="year-value"></output></label>
         <label class="zoom-control">Semantic zoom <input id="zoom" type="range" min="0" max="2" step="1" /><output id="zoom-value"></output></label>
       </section>
-      <section class="fabric-wrap"><canvas id="fabric" aria-label="Artist relation temporal field"></canvas><div class="legend"><span></span> Artist × Artist / Artist × Work crosses · brighter = greater relation weight · click a cross</div></section>
+      <section class="fabric-wrap"><canvas id="fabric" aria-label="Artist relation temporal field; use a mouse wheel, two-finger trackpad scroll, or pinch gesture to change Artist semantic zoom"></canvas><div class="legend"><span></span> Artist × Artist / Artist × Work crosses · brighter = greater relation weight · scroll or pinch = Artist zoom · click a cross</div></section>
       <section class="detail" id="detail"><p class="detail-kicker">ARTIST-FIRST FABRIC</p><h2>Artist × related entity</h2><p>Semantic zoom aggregates source Artists on X only. Related Artists and Works remain individual entities on Y.</p></section>
       <footer><span id="metrics"></span><span>Sample asset · no live database connection</span></footer>
     </main>

@@ -22,6 +22,10 @@ const yearDeltaCache = new Map();
 let yearAnimation, animationFrame;
 const LOD_KEYS = ['overview', 'cluster', 'artist'];
 const YEAR_DURATION_AT_1X = 1400;
+// The reference field is the normal in-page canvas.  Pulses need to grow with
+// the available drawing surface: otherwise fullscreen spreads the columns out
+// while leaving a fixed-pixel flare too small to read as light.
+const GLOW_REFERENCE_SIZE = {width: 1280, height: 620};
 
 function visibleArtists() { return selected === 'all' ? data.artists : data.artists.filter((a) => a.id === selected); }
 function cache() { const key = `${yearIndex}:${selected}`; if (relationCache.key !== key) relationCache = {key, raw: null, works: new Map(), artists: new Map()}; return relationCache; }
@@ -76,6 +80,10 @@ function lodLayers() {
 }
 function zoomLabel() { const layers = lodLayers(); return layers.length === 1 ? LOD_LABELS[layers[0].index] : `${LOD_LABELS[layers[0].index]} → ${LOD_LABELS[layers[1].index]}`; }
 function cameraScale() { return Math.max(1, 2 ** (cameraZoom - 1)); }
+function glowScale(width, height) {
+  const areaRatio = width * height / (GLOW_REFERENCE_SIZE.width * GLOW_REFERENCE_SIZE.height);
+  return Math.max(.78, Math.min(2.7, Math.sqrt(areaRatio)));
+}
 function constrainPan(width = canvas.clientWidth, height = canvas.clientHeight) {
   const scale = cameraScale();
   // Treat the visible matrix as a bounded world with its top-left at (0, 0).
@@ -107,6 +115,7 @@ function appendYearPulse(points, width, height) {
   if (!yearAnimation || selected !== 'all') return;
   const elapsed = performance.now() - yearAnimation.startedAt;
   if (elapsed >= yearAnimation.duration) return;
+  const responsiveGlow = glowScale(width, height);
   const phase = elapsed / yearAnimation.duration, columnDelay = .68, columnSpan = 1 - columnDelay;
   for (const {index, opacity} of lodLayers()) {
     const layout = geometry(width, height, data._lodModes[index].nodes.length);
@@ -121,7 +130,7 @@ function appendYearPulse(points, width, height) {
         for (const cell of columns.get(x) || []) {
           const cellY = yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), distance = Math.abs(cellY - beamY) / Math.max(1, yBottom - yTop);
           if (distance > .035) continue;
-          const flare = (1 - distance / .035) * opacity, size = 4 + Math.min(7, Math.sqrt(cell.weight) * .9);
+          const flare = (1 - distance / .035) * opacity, size = (4 + Math.min(7, Math.sqrt(cell.weight) * .9)) * responsiveGlow;
           // Pulses are drawn in a separate additive pass: a broad halo keeps
           // new relations legible over an already bright late-year fabric.
           points.push(xPosition, cellY, 1, .48, .08, .16 * flare, size * 3.4);
@@ -220,6 +229,15 @@ function zoomFromWheel(event, zoomControl) {
 function beginDrag(event) { if (cameraScale() <= 1) return; dragState = {x: event.clientX, y: event.clientY, panX: cameraPan.x, panY: cameraPan.y, moved: false}; canvas.setPointerCapture(event.pointerId); canvas.classList.add('is-panning'); }
 function moveDrag(event) { if (!dragState) return; cameraPan.x = dragState.panX + event.clientX - dragState.x; cameraPan.y = dragState.panY + event.clientY - dragState.y; dragState.moved ||= Math.abs(event.clientX - dragState.x) + Math.abs(event.clientY - dragState.y) > 3; constrainPan(); draw(); }
 function endDrag(event) { if (!dragState) return; const moved = dragState.moved; dragState = undefined; canvas.classList.remove('is-panning'); if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId); if (moved) { ignoreNextClick = true; selectedLink = undefined; } }
+async function toggleFullscreen() {
+  if (document.fullscreenElement === canvas) await document.exitFullscreen();
+  else await canvas.requestFullscreen({navigationUI: 'hide'});
+}
+function syncFullscreenControl() {
+  const active = document.fullscreenElement === canvas, control = $('#fullscreen');
+  control.setAttribute('aria-pressed', String(active)); control.textContent = active ? 'Exit fullscreen' : 'Fullscreen';
+  draw();
+}
 async function loadTiles() {
   const base = '/public/data/woven-tiles', manifest = await fetch(`${base}/manifest.json`).then((response) => response.json());
   await Promise.all(LOD_KEYS.flatMap((lod, modeIndex) => ['artist', 'work'].map(async (layer) => {
@@ -227,5 +245,5 @@ async function loadTiles() {
     tiles.set(`${modeIndex}:${layer}`, {...info, cells: text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))});
   })));
 }
-async function init() { data = await fetch('/public/data/woven-sample.json').then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; setAnimationSpeed(); $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; selectedLink = undefined; update(); }); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); update(); }
+async function init() { data = await fetch('/public/data/woven-sample.json').then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; setAnimationSpeed(); $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; selectedLink = undefined; update(); }); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); $('#fullscreen').addEventListener('click', toggleFullscreen); document.addEventListener('fullscreenchange', syncFullscreenControl); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); update(); }
 init();

@@ -6,18 +6,28 @@ The app must not depend directly on the ClassiiDB PostgreSQL database or large s
 
 ## Sample prototype
 
-Build the compact browser asset after generating the WOVEN sample outputs:
+Build the compact browser asset and sparse LOD pixel tiles after generating the
+WOVEN sample outputs:
 
 ```sh
-python3 scripts/import_sample_assets.py
+python3 scripts/import_sample_assets.py --suffix artist_first_1000_artists
+python3 ../woven-data/src/build_artist_lod_pixel_tiles.py \
+  --relations ../woven-data/output/artist_work_relations_artist_first_1000_artists.jsonl \
+  --artist-order ../woven-data/output/artist_dimension_order_artist_first_1000_artists.jsonl \
+  --artist-tree ../woven-data/output/artist_lod_tree_artist_first_1000_artists.jsonl \
+  --vectors ../woven-data/output/artist_year_vectors_artist_first_1000_artists.jsonl \
+  --output-dir public/data/woven-tiles \
+  --snapshot-id classii-3a1d5ce-artist-first-20261005
 python3 -m http.server 4173 --bind 127.0.0.1
 ```
 
 Open `http://localhost:4173`. The X axis is the complete Artist population and
 semantic zoom switches it between overview clusters, intermediate clusters, and
 individual Artists. The Y axis has two non-compressed entity layers:
-Work-mediated related Artists and individual Works. The prototype accumulates
-Artist-by-entity crosses as the year control advances. Density comes from the
-growing cross count, while relation weight is encoded by gold brightness. It also
-provides Artist focus and relation inspection,
+Work-mediated related Artists and individual Works. In the all-Artist view, each
+LOD layer is rendered from a corresponding sparse pixel matrix. Each pixel stores
+temporal deltas, so the year control accumulates it without rebuilding the
+complete relation graph. Density comes from the growing cross count, while
+relation weight is encoded by gold brightness. Choosing an Artist switches to its
+precise entity-level relations for focus and inspection,
 and offers an opt-in Web Audio beat.

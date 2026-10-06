@@ -20,6 +20,7 @@ let tileCache = new Map(), tiles = new Map();
 const compactScaleCache = new WeakMap();
 const yearDeltaCache = new Map();
 const artistOverlayCache = new Map();
+const overlayPulseCellCache = new Map();
 let yearAnimation, animationFrame;
 const LOD_KEYS = ['overview', 'cluster', 'artist'];
 const YEAR_DURATION_AT_1X = 1400;
@@ -118,12 +119,12 @@ function appendLodLayer(points, modeIndex, opacity, width, height, maxWeight, te
 function overlayPoint(points, x, y, weight, maxWeight, opacity, modeIndex) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(maxWeight));
   const boost = modeIndex === 0 ? 1.62 : modeIndex === 1 ? 1.27 : 1;
-  points.push(x, y, .30, .82, 1, (.64 + intensity * .34) * opacity, (3.2 + Math.sqrt(weight) * .28) * boost);
+  points.push(x, y, .31, .86, .48, (.64 + intensity * .34) * opacity, (3.2 + Math.sqrt(weight) * .28) * boost);
 }
 function reverseOverlayPoint(points, x, y, weight, maxWeight, opacity, modeIndex) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(maxWeight));
   const boost = modeIndex === 0 ? 1.35 : modeIndex === 1 ? 1.16 : 1;
-  points.push(x, y, 1, .34, .62, (.62 + intensity * .36) * opacity, (3.1 + Math.sqrt(weight) * .28) * boost);
+  points.push(x, y, 1, .54, .18, (.62 + intensity * .36) * opacity, (3.1 + Math.sqrt(weight) * .28) * boost);
 }
 function artistOverlayLinks(artistId, temporalIndex) {
   const key = `${artistId}:${temporalIndex}`, cached = artistOverlayCache.get(key); if (cached) return cached;
@@ -164,6 +165,15 @@ function foldOverlayLinks(modeIndex, layer, links) {
   }
   return {tile, cells: [...cells.values()]};
 }
+function overlayPulseCells(modeIndex, layer, temporalIndex) {
+  if (selected === 'all') return undefined;
+  const key = `${selected}:${temporalIndex}:${modeIndex}:${layer}`, cached = overlayPulseCellCache.get(key); if (cached) return cached;
+  const overlay = artistOverlayLinks(selected, temporalIndex); if (!overlay) return undefined;
+  const outgoing = layer === 'artist' ? [...overlay.artists].map(([target, weight]) => ({source: selected, target, weight})) : [...overlay.works].map(([target, weight]) => ({source: selected, target, weight}));
+  const incoming = layer === 'artist' ? [...overlay.reverseArtists].map(([source, weight]) => ({source, target: selected, weight})) : overlay.reverseWorks;
+  const cells = new Set([...foldOverlayLinks(modeIndex, layer, outgoing).cells, ...foldOverlayLinks(modeIndex, layer, incoming).cells].map((cell) => `${cell.x}:${cell.y}`));
+  overlayPulseCellCache.set(key, cells); return cells;
+}
 function appendArtistOverlay(points, modeIndex, opacity, width, height, maxWeight, temporalIndex = yearIndex) {
   if (selected === 'all') return;
   const overlay = artistOverlayLinks(selected, temporalIndex), selectedArtist = data._artistsById.get(selected);
@@ -193,6 +203,7 @@ function appendYearPulse(points, pulseCandidates, width, height) {
       const tile = tiles.get(`${index}:${layer}`), yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
       const first = Math.max(0, Math.ceil((phase - columnSpan) / columnDelay * (tile.width - 1))), last = Math.min(tile.width - 1, Math.floor(phase / columnDelay * (tile.width - 1)));
       const columns = yearDeltaColumns(index, layer, yearAnimation.yearIndex);
+      const highlightedCells = overlayPulseCells(index, layer, yearAnimation.yearIndex);
       for (let x = first; x <= last; x += 1) {
         const columnPhase = (phase - x / Math.max(1, tile.width - 1) * columnDelay) / columnSpan;
         if (columnPhase < 0 || columnPhase > 1) continue;
@@ -205,7 +216,7 @@ function appendYearPulse(points, pulseCandidates, width, height) {
           // new relations legible over an already bright late-year fabric.
           points.push(xPosition, cellY, 1, .48, .08, .16 * flare, size * 3.4);
           points.push(xPosition, cellY, 1, .91, .48, .98 * flare, size);
-          pulseCandidates.push({key: `${index}:${layer}:${x}:${cell.y}`, weight: cell.weight});
+          pulseCandidates.push({key: `${index}:${layer}:${x}:${cell.y}`, weight: cell.weight, highlighted: highlightedCells?.has(`${x}:${cell.y}`)});
         }
       }
     }
@@ -393,6 +404,18 @@ function vectorTone(weight) {
   else if (glowInstrument === 'piano-synth') pianoTone(weight);
   else sampleTone(glowInstrument, weight);
 }
+function highlightTone(weight) {
+  const context = soundContext(); if (!context) return;
+  const {amount, frequency} = vectorPitch(weight), now = context.currentTime, root = Math.max(880, Math.min(2640, frequency * 4));
+  // High, inharmonic partials make the overlay read as a small glint above
+  // the regular vector voice, while the shared reverb places both together.
+  for (const [ratio, level, decay] of [[1, .010, .34], [2.01, .006, .22], [2.76, .004, .29], [4.07, .0025, .16]]) {
+    const oscillator = context.createOscillator(), gain = context.createGain(), filter = context.createBiquadFilter();
+    oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(root * ratio, now); filter.type = 'highpass'; filter.frequency.value = 720;
+    envelope(gain, now, level + amount * level * .75, .003, decay + amount * .12);
+    oscillator.connect(filter).connect(gain).connect(soundChannel(context, 'glow')); oscillator.start(now); oscillator.stop(now + decay + amount * .12 + .03);
+  }
+}
 function playPulseCandidates(candidates) {
   if (!yearAnimation || !candidates.length) return;
   const fresh = candidates.filter((candidate) => !yearAnimation.soundedPulses.has(candidate.key));
@@ -402,6 +425,8 @@ function playPulseCandidates(candidates) {
   if (now - yearAnimation.lastToneAt < 86) return;
   yearAnimation.lastToneAt = now;
   vectorTone(fresh.reduce((largest, candidate) => candidate.weight > largest.weight ? candidate : largest).weight);
+  const highlights = fresh.filter((candidate) => candidate.highlighted);
+  if (highlights.length) highlightTone(highlights.reduce((largest, candidate) => candidate.weight > largest.weight ? candidate : largest).weight);
 }
 function update() { $('#year-value').textContent = data.years[yearIndex]; draw(); }
 function setDisplayedYear(index) { $('#year').value = index; $('#year-value').textContent = data.years[index]; }

@@ -1,0 +1,28 @@
+{
+  "id": "musescore-general-hq-piano",
+  "name": "MuseScore General HQ Piano",
+  "format": "ogg/opus",
+  "sample_rate": 48000,
+  "samples": [
+    {
+      "note": 52,
+      "file": "52.ogg"
+    },
+    {
+      "note": 59,
+      "file": "59.ogg"
+    },
+    {
+      "note": 64,
+      "file": "64.ogg"
+    },
+    {
+      "note": 71,
+      "file": "71.ogg"
+    },
+    {
+      "note": 76,
+      "file": "76.ogg"
+    }
+  ]
+}

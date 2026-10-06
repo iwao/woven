@@ -7,23 +7,33 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
+    <aside class="control-drawer" id="control-drawer" aria-label="WOVEN controls">
+      <button class="drawer-toggle" id="drawer-toggle" aria-expanded="false" aria-controls="drawer-body" title="Show WOVEN controls">Controls</button>
+      <div class="drawer-body" id="drawer-body">
+        <p class="drawer-kicker">WOVEN CONTROLS</p>
+        <section class="control-group" aria-labelledby="view-controls-title">
+          <h2 id="view-controls-title">View</h2>
+          <label>Artist <select id="artist"><option value="all">All artists</option></select></label>
+          <label class="year-control">Year <input id="year" type="range" /><output id="year-value"></output></label>
+          <button id="play-years" aria-pressed="false" title="Animate annual additions">Play years</button>
+          <label class="speed-control">Animation speed <input id="animation-speed" type="range" min="0.25" max="2" value="0.65" step="0.05" /><output id="animation-speed-value">0.65×</output></label>
+          <label class="zoom-control">Semantic zoom <input id="zoom" type="range" min="0" max="2" step="1" /><output id="zoom-value"></output></label>
+          <button id="fullscreen" aria-pressed="false" title="Show canvas only in fullscreen">Fullscreen</button>
+        </section>
+        <section class="control-group sound-group" aria-labelledby="sound-controls-title">
+          <h2 id="sound-controls-title">Sound</h2>
+          <button id="sound" aria-pressed="false">Sound off</button>
+          <label class="instrument-control">Glow sound <select id="glow-instrument"><option value="synth">Synth</option><option value="piano-synth">Piano (synth)</option></select></label>
+          <label class="volume-control">Glow volume <input id="glow-volume" type="range" min="0" max="1" value="0.8" step="0.01" /><output id="glow-volume-value">80%</output></label>
+          <label>Weave clack <select id="weave-clack"></select></label>
+          <label class="volume-control">Clack volume <input id="clack-volume" type="range" min="0" max="1" value="0.1" step="0.01" /><output id="clack-volume-value">10%</output></label>
+          <label class="volume-control">Reverb <input id="reverb-amount" type="range" min="0" max="1" value="0.6" step="0.01" /><output id="reverb-amount-value">60%</output></label>
+        </section>
+      </div>
+    </aside>
     <main>
-      <header>
-        <div><p class="eyebrow">CLASSII × WOVEN / PROTOTYPE</p><h1>WOVEN</h1></div>
-        <div class="header-actions"><button id="sound" aria-pressed="false">Sound off</button><span id="scope"></span></div>
-      </header>
-      <section class="intro"><p>Artists form the X axis and semantic zoom compresses only that source-Artist column. The Y axis has two individual-entity layers: related Artists, then Works. Each illuminated cross identifies one relation; accumulated weight appears as brightness.</p></section>
-      <section class="controls" aria-label="WOVEN controls">
-        <label>Artist <select id="artist"><option value="all">All artists</option></select></label>
-        <label class="year-control">Year <input id="year" type="range" /><output id="year-value"></output></label>
-        <button id="play-years" aria-pressed="false" title="Animate annual additions">Play years</button>
-        <label class="speed-control">Animation speed <input id="animation-speed" type="range" min="0.25" max="2" value="0.65" step="0.05" /><output id="animation-speed-value">0.65×</output></label>
-        <button id="fullscreen" aria-pressed="false" title="Show canvas only in fullscreen">Fullscreen</button>
-        <label class="zoom-control">Semantic zoom <input id="zoom" type="range" min="0" max="2" step="1" /><output id="zoom-value"></output></label>
-      </section>
       <section class="fabric-wrap"><canvas id="fabric" aria-label="Artist relation temporal field; use a mouse wheel, two-finger trackpad scroll, or pinch gesture to change Artist semantic zoom"></canvas><div class="legend"><span></span> Artist × Artist / Artist × Work crosses · brighter = greater relation weight · scroll or pinch = Artist zoom · click a cross</div></section>
-      <section class="detail" id="detail"><p class="detail-kicker">ARTIST-FIRST FABRIC</p><h2>Artist × related entity</h2><p>Semantic zoom aggregates source Artists on X only. Related Artists and Works remain individual entities on Y.</p></section>
-      <footer><span id="metrics"></span><span>Sample asset · no live database connection</span></footer>
+      <footer><span id="metrics"></span><span id="scope" hidden></span><span>Sample asset · no live database connection</span></footer>
     </main>
     <script type="module" src="/src/app.js"></script>
   </body>

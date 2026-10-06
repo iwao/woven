@@ -1,0 +1,24 @@
+{
+  "sounds": [
+    {
+      "id": "372877__hakren__iron-wood-slam.wav",
+      "name": "Hakren \u2014 Iron Wood Slam",
+      "file": "/public/audio/wave/372877__hakren__iron-wood-slam.wav"
+    },
+    {
+      "id": "488912__phonosupf__vibrating-wood-3.wav",
+      "name": "Phonosupf \u2014 Vibrating Wood 3",
+      "file": "/public/audio/wave/488912__phonosupf__vibrating-wood-3.wav"
+    },
+    {
+      "id": "488927__phonosupf__wood-sequence-4.wav",
+      "name": "Phonosupf \u2014 Wood Sequence 4",
+      "file": "/public/audio/wave/488927__phonosupf__wood-sequence-4.wav"
+    },
+    {
+      "id": "489000__phonosupf__wood-bell.wav",
+      "name": "Phonosupf \u2014 Wood Bell",
+      "file": "/public/audio/wave/489000__phonosupf__wood-bell.wav"
+    }
+  ]
+}

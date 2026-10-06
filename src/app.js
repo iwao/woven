@@ -14,7 +14,7 @@ const program = gl.createProgram(); gl.attachShader(program, shader(gl.VERTEX_SH
 const pointBuffer = gl.createBuffer(), positionLoc = gl.getAttribLocation(program, 'a_position'), colorLoc = gl.getAttribLocation(program, 'a_color'), sizeLoc = gl.getAttribLocation(program, 'a_size');
 const uniforms = Object.fromEntries(['u_resolution', 'u_center', 'u_pan', 'u_scale', 'u_pixel_ratio'].map((name) => [name, gl.getUniformLocation(program, name)]));
 const LOD_LABELS = ['Overview', 'Cluster', 'Artist'];
-let data, selected = 'all', yearIndex = 0, lodIndex = 1, cameraZoom = 1, cameraPan = {x: 0, y: 0}, dragState, ignoreNextClick = false, sound = false, audio, selectedLink;
+let data, selected = 'all', yearIndex = 0, lodIndex = 1, cameraZoom = 1, cameraPan = {x: 0, y: 0}, dragState, ignoreNextClick = false, sound = false, glowVolume = .8, clackVolume = .1, reverbAmount = .6, audio, audioBus, reverbBus, glowBus, clackBus, glowInstrument = 'synth', weaveClackId, selectedLink;
 let relationCache = {key: '', raw: [], works: new Map(), artists: new Map()};
 let tileCache = new Map(), tiles = new Map();
 const compactScaleCache = new WeakMap();
@@ -22,10 +22,15 @@ const yearDeltaCache = new Map();
 let yearAnimation, animationFrame;
 const LOD_KEYS = ['overview', 'cluster', 'artist'];
 const YEAR_DURATION_AT_1X = 1400;
+const INSTRUMENT_CATALOG_URL = '/public/audio/instruments/manifest.json';
+const WAVE_CATALOG_URL = '/public/audio/wave/manifest.json';
+const DEFAULT_WEAVE_CLACK = '489000__phonosupf__wood-bell.wav';
 // The reference field is the normal in-page canvas.  Pulses need to grow with
 // the available drawing surface: otherwise fullscreen spreads the columns out
 // while leaving a fixed-pixel flare too small to read as light.
 const GLOW_REFERENCE_SIZE = {width: 1280, height: 620};
+const instrumentCatalog = new Map(), loadedInstrumentPacks = new Map();
+const waveCatalog = new Map(), weaveClackBuffers = new Map(), weaveClackPromises = new Map();
 
 function visibleArtists() { return selected === 'all' ? data.artists : data.artists.filter((a) => a.id === selected); }
 function cache() { const key = `${yearIndex}:${selected}`; if (relationCache.key !== key) relationCache = {key, raw: null, works: new Map(), artists: new Map()}; return relationCache; }
@@ -111,7 +116,7 @@ function appendLodLayer(points, modeIndex, opacity, width, height, maxWeight, te
   for (const link of works) { const target = data._worksById.get(link.target); if (target) point(points, layout.x(link.source), layout.workY(target.index), link.weight, maxWeight, selectedLink === `w:${modeIndex}:${link.source}:${link.target}`, opacity); }
   nodes.forEach((node, i) => points.push(layout.x(i), 54, .945, .808, .47, .72 * opacity, 4.4));
 }
-function appendYearPulse(points, width, height) {
+function appendYearPulse(points, pulseCandidates, width, height) {
   if (!yearAnimation || selected !== 'all') return;
   const elapsed = performance.now() - yearAnimation.startedAt;
   if (elapsed >= yearAnimation.duration) return;
@@ -135,6 +140,7 @@ function appendYearPulse(points, width, height) {
           // new relations legible over an already bright late-year fabric.
           points.push(xPosition, cellY, 1, .48, .08, .16 * flare, size * 3.4);
           points.push(xPosition, cellY, 1, .91, .48, .98 * flare, size);
+          pulseCandidates.push({key: `${index}:${layer}:${x}:${cell.y}`, weight: cell.weight});
         }
       }
     }
@@ -151,10 +157,11 @@ function draw() {
   const timeStates = yearAnimation && dissolve > 0 ? [{index: yearIndex, opacity: 1 - dissolve}, {index: yearAnimation.yearIndex, opacity: dissolve}] : [{index: yearIndex, opacity: 1}];
   const allLinks = timeStates.flatMap((timeState) => layers.flatMap(({index}) => selected === 'all' ? [...tileLinks(index, 'artist', timeState.index), ...tileLinks(index, 'work', timeState.index)] : [...artistLinks(index), ...workLinks(index)]));
   const max = allLinks.reduce((largest, link) => Math.max(largest, link.weight), 1);
-  const points = [], pulses = [], viewScale = cameraScale(); constrainPan(rect.width, rect.height); timeStates.forEach((timeState) => layers.forEach(({index, opacity}) => appendLodLayer(points, index, opacity * timeState.opacity, rect.width, rect.height, max, timeState.index))); appendYearPulse(pulses, rect.width, rect.height); renderPoints(points, pulses, rect.width, rect.height, viewScale);
+  const points = [], pulses = [], pulseCandidates = [], viewScale = cameraScale(); constrainPan(rect.width, rect.height); timeStates.forEach((timeState) => layers.forEach(({index, opacity}) => appendLodLayer(points, index, opacity * timeState.opacity, rect.width, rect.height, max, timeState.index))); appendYearPulse(pulses, pulseCandidates, rect.width, rect.height); renderPoints(points, pulses, rect.width, rect.height, viewScale); playPulseCandidates(pulseCandidates);
 }
 function details(event) {
   if (selected === 'all') return;
+  const detail = $('#detail'); if (!detail) return;
   const rect = canvas.getBoundingClientRect(), viewScale = cameraScale();
   const worldX = (event.clientX - rect.left - rect.width / 2 - cameraPan.x) / viewScale + rect.width / 2;
   const worldY = (event.clientY - rect.top - rect.height / 2 - cameraPan.y) / viewScale + rect.height / 2;
@@ -171,11 +178,167 @@ function details(event) {
   }
   if (!link) return;
   const node = nodes[source], sourceName = node.artist ? data._artistsById.get(node.artist).name : `${node.leaves} Artists`;
-  $('#detail').innerHTML = `<p class="detail-kicker">${LOD_LABELS[lodIndex].toUpperCase()} ARTIST SOURCE</p><h2>${sourceName} → ${target.name}</h2><p>Relation weight through ${data.years[yearIndex]}: ${link.weight.toFixed(2)}.</p>`;
+  detail.innerHTML = `<p class="detail-kicker">${LOD_LABELS[lodIndex].toUpperCase()} ARTIST SOURCE</p><h2>${sourceName} → ${target.name}</h2><p>Relation weight through ${data.years[yearIndex]}: ${link.weight.toFixed(2)}.</p>`;
   draw();
 }
-function beat(value) { if (!sound) return; audio ||= new AudioContext(); const now = audio.currentTime, oscillator = audio.createOscillator(), gain = audio.createGain(); oscillator.frequency.setValueAtTime(70 + Math.min(180, value * 8), now); gain.gain.setValueAtTime(.0001, now); gain.gain.exponentialRampToValueAtTime(.12, now + .006); gain.gain.exponentialRampToValueAtTime(.0001, now + .13); oscillator.connect(gain).connect(audio.destination); oscillator.start(now); oscillator.stop(now + .14); }
-function update() { $('#year-value').textContent = data.years[yearIndex]; beat(visibleArtists().flatMap((a) => a.series).find((row) => row.year === data.years[yearIndex])?.delta || 0); draw(); }
+function soundContext() {
+  if (!sound) return;
+  audio ||= new AudioContext();
+  if (audio.state === 'suspended') audio.resume();
+  return audio;
+}
+function soundOutput(context) {
+  if (audioBus) return audioBus;
+  const master = context.createGain(), dry = context.createGain(), reverb = context.createConvolver(), tone = context.createBiquadFilter(), wet = context.createGain();
+  // Keep the shared space short and dark: it binds the points together without
+  // blurring the attack that makes each new vector feel discrete.
+  const seconds = .72, length = Math.floor(context.sampleRate * seconds), impulse = context.createBuffer(2, length, context.sampleRate);
+  for (let channel = 0; channel < impulse.numberOfChannels; channel += 1) {
+    const samples = impulse.getChannelData(channel);
+    for (let i = 0; i < length; i += 1) samples[i] = (Math.random() * 2 - 1) * (1 - i / length) ** 2.7;
+  }
+  reverb.buffer = impulse; master.gain.value = .82; dry.gain.value = .92; wet.gain.value = reverbAmount;
+  tone.type = 'lowpass'; tone.frequency.value = 3100;
+  master.connect(dry).connect(context.destination); master.connect(reverb).connect(tone).connect(wet).connect(context.destination); reverbBus = wet;
+  return audioBus = master;
+}
+function soundChannel(context, channel) {
+  soundOutput(context);
+  const existing = channel === 'glow' ? glowBus : clackBus;
+  if (existing) return existing;
+  const bus = context.createGain(); bus.gain.value = channel === 'glow' ? glowVolume : clackVolume; bus.connect(audioBus);
+  if (channel === 'glow') glowBus = bus; else clackBus = bus;
+  return bus;
+}
+function setChannelVolume(channel, value) {
+  const output = channel === 'glow' ? '#glow-volume-value' : '#clack-volume-value', bus = channel === 'glow' ? glowBus : clackBus;
+  if (channel === 'glow') glowVolume = value; else clackVolume = value;
+  $(output).textContent = `${Math.round(value * 100)}%`;
+  if (bus && audio) bus.gain.setTargetAtTime(value, audio.currentTime, .025);
+}
+function setReverbAmount(value) {
+  reverbAmount = value;
+  $('#reverb-amount-value').textContent = `${Math.round(value * 100)}%`;
+  if (reverbBus && audio) reverbBus.gain.setTargetAtTime(value, audio.currentTime, .035);
+}
+async function loadWaveCatalog(control) {
+  const catalog = await fetch(WAVE_CATALOG_URL).then((response) => response.json());
+  for (const wave of catalog.sounds || []) {
+    waveCatalog.set(wave.id, wave);
+    const option = document.createElement('option'); option.value = wave.id; option.textContent = wave.name; control.append(option);
+  }
+  if (waveCatalog.has(DEFAULT_WEAVE_CLACK)) control.value = DEFAULT_WEAVE_CLACK;
+}
+function loadWeaveClack(context, id = weaveClackId) {
+  if (weaveClackBuffers.has(id)) return Promise.resolve(weaveClackBuffers.get(id));
+  if (weaveClackPromises.has(id)) return weaveClackPromises.get(id);
+  const wave = waveCatalog.get(id);
+  if (!wave) return Promise.reject(new Error(`Unknown weave clack: ${id}`));
+  const promise = fetch(wave.file).then((response) => response.arrayBuffer()).then((buffer) => context.decodeAudioData(buffer)).then((buffer) => { weaveClackBuffers.set(id, buffer); weaveClackPromises.delete(id); return buffer; }).catch((error) => { weaveClackPromises.delete(id); throw error; });
+  weaveClackPromises.set(id, promise); return promise;
+}
+async function loadInstrumentCatalog(control) {
+  const catalog = await fetch(INSTRUMENT_CATALOG_URL).then((response) => response.json());
+  for (const instrument of catalog.instruments || []) {
+    instrumentCatalog.set(instrument.id, instrument);
+    if ([...control.options].some((option) => option.value === instrument.id)) continue;
+    const option = document.createElement('option'); option.value = instrument.id; option.textContent = instrument.name; control.append(option);
+  }
+}
+function loadInstrumentPack(id, context) {
+  if (loadedInstrumentPacks.has(id)) return loadedInstrumentPacks.get(id);
+  const instrument = instrumentCatalog.get(id);
+  if (!instrument) return Promise.reject(new Error(`Unknown instrument: ${id}`));
+  const manifestUrl = new URL(instrument.manifest, window.location.href);
+  const promise = fetch(manifestUrl).then((response) => response.json()).then(async (manifest) => ({
+    ...manifest,
+    samples: await Promise.all(manifest.samples.map(async (sample) => ({
+      ...sample,
+      buffer: await context.decodeAudioData(await fetch(new URL(sample.file, manifestUrl)).then((response) => response.arrayBuffer())),
+    }))),
+  })).then((pack) => { loadedInstrumentPacks.set(id, pack); return pack; }).catch((error) => { loadedInstrumentPacks.delete(id); throw error; });
+  loadedInstrumentPacks.set(id, promise); return promise;
+}
+function envelope(gain, at, peak, attack, release) {
+  gain.gain.setValueAtTime(.0001, at);
+  gain.gain.exponentialRampToValueAtTime(peak, at + attack);
+  gain.gain.exponentialRampToValueAtTime(.0001, at + attack + release);
+}
+function syntheticWeaveClack(context) {
+  const now = context.currentTime;
+  // A low wooden body followed by a quiet high mechanical tick.
+  for (const [offset, frequency, peak, release] of [[0, 142, .042, .07], [.035, 238, .018, .035]]) {
+    const oscillator = context.createOscillator(), gain = context.createGain();
+    oscillator.type = 'triangle'; oscillator.frequency.setValueAtTime(frequency, now + offset);
+    envelope(gain, now + offset, peak, .003, release);
+    oscillator.connect(gain).connect(soundChannel(context, 'clack')); oscillator.start(now + offset); oscillator.stop(now + offset + release + .02);
+  }
+}
+function weaveClack() {
+  const context = soundContext(); if (!context) return;
+  const buffer = weaveClackBuffers.get(weaveClackId);
+  if (!buffer) { loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); syntheticWeaveClack(context); return; }
+  const source = context.createBufferSource(), gain = context.createGain(), now = context.currentTime;
+  // Preserve the recorded attack and tail; its own decay makes a more natural
+  // shuttle sound than a programmatic envelope or an arbitrary trim.
+  source.buffer = buffer; gain.gain.setValueAtTime(.19, now);
+  source.connect(gain).connect(soundChannel(context, 'clack')); source.start(now);
+}
+function vectorPitch(weight) {
+  const amount = Math.min(1, Math.log1p(weight) / Math.log1p(28));
+  const intervals = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21];
+  return {amount, frequency: 196 * 2 ** (intervals[Math.round(amount * (intervals.length - 1))] / 12)};
+}
+function synthTone(weight) {
+  const context = soundContext(); if (!context) return;
+  // Logarithmic weighting keeps an exceptional relation from jumping too far
+  // above the rest, then quantises the result into a warm pentatonic scale.
+  const {amount, frequency} = vectorPitch(weight);
+  const now = context.currentTime, oscillator = context.createOscillator(), gain = context.createGain(), filter = context.createBiquadFilter();
+  oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(frequency, now);
+  filter.type = 'lowpass'; filter.frequency.setValueAtTime(1800 + amount * 2200, now); filter.Q.value = 1.8;
+  envelope(gain, now, .012 + amount * .018, .008, .13 + amount * .09);
+  oscillator.connect(filter).connect(gain).connect(soundChannel(context, 'glow')); oscillator.start(now); oscillator.stop(now + .28);
+}
+function pianoTone(weight) {
+  const context = soundContext(); if (!context) return;
+  const {amount, frequency} = vectorPitch(weight), now = context.currentTime;
+  // A compact piano-like additive voice: tuned partials with independent,
+  // quick decays make the discrete pitch more tactile than the pure synth.
+  for (const [ratio, level, decay] of [[1, 1, .52], [2, .32, .31], [3, .14, .2], [4.01, .07, .13]]) {
+    const oscillator = context.createOscillator(), gain = context.createGain();
+    oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(frequency * ratio, now); oscillator.detune.value = ratio === 1 ? 0 : (ratio - 1) * 1.6;
+    envelope(gain, now, (.009 + amount * .02) * level, .002, decay + amount * .12);
+    oscillator.connect(gain).connect(soundChannel(context, 'glow')); oscillator.start(now); oscillator.stop(now + decay + amount * .12 + .03);
+  }
+}
+function sampleTone(id, weight) {
+  const context = soundContext(); if (!context) return;
+  const pack = loadedInstrumentPacks.get(id);
+  if (!pack || !pack.samples) { loadInstrumentPack(id, context).catch((error) => console.warn('Unable to load glow instrument', error)); synthTone(weight); return; }
+  const {amount, frequency} = vectorPitch(weight), requestedNote = 69 + 12 * Math.log2(frequency / 440);
+  const sample = pack.samples.reduce((nearest, candidate) => Math.abs(candidate.note - requestedNote) < Math.abs(nearest.note - requestedNote) ? candidate : nearest);
+  const source = context.createBufferSource(), gain = context.createGain(), now = context.currentTime;
+  source.buffer = sample.buffer; source.playbackRate.value = 2 ** ((requestedNote - sample.note) / 12);
+  envelope(gain, now, .09 + amount * .08, .003, .48 + amount * .24);
+  source.connect(gain).connect(soundChannel(context, 'glow')); source.start(now); source.stop(now + 1.1);
+}
+function vectorTone(weight) {
+  if (glowInstrument === 'synth') synthTone(weight);
+  else if (glowInstrument === 'piano-synth') pianoTone(weight);
+  else sampleTone(glowInstrument, weight);
+}
+function playPulseCandidates(candidates) {
+  if (!yearAnimation || !candidates.length) return;
+  const fresh = candidates.filter((candidate) => !yearAnimation.soundedPulses.has(candidate.key));
+  fresh.forEach((candidate) => yearAnimation.soundedPulses.add(candidate.key));
+  if (!fresh.length || !sound) return;
+  const now = performance.now();
+  if (now - yearAnimation.lastToneAt < 86) return;
+  yearAnimation.lastToneAt = now;
+  vectorTone(fresh.reduce((largest, candidate) => candidate.weight > largest.weight ? candidate : largest).weight);
+}
+function update() { $('#year-value').textContent = data.years[yearIndex]; draw(); }
 function setDisplayedYear(index) { $('#year').value = index; $('#year-value').textContent = data.years[index]; }
 function stopYearAnimation(commit = true) {
   const pending = yearAnimation;
@@ -192,8 +355,8 @@ function setAnimationSpeed() {
   yearAnimation.duration = nextDuration; yearAnimation.startedAt = performance.now() - phase * nextDuration;
 }
 function beginYearAnimation(targetIndex) {
-  yearAnimation = {yearIndex: targetIndex, startedAt: performance.now(), duration: animationDuration(), dissolveDuration: 260};
-  setDisplayedYear(targetIndex); beat(visibleArtists().flatMap((artist) => artist.series).find((row) => row.year === data.years[targetIndex])?.delta || 0); draw();
+  yearAnimation = {yearIndex: targetIndex, startedAt: performance.now(), duration: animationDuration(), dissolveDuration: 260, soundedPulses: new Set(), lastToneAt: -Infinity};
+  setDisplayedYear(targetIndex); weaveClack(); draw();
 }
 function animateYear() {
   draw();
@@ -238,6 +401,10 @@ function syncFullscreenControl() {
   control.setAttribute('aria-pressed', String(active)); control.textContent = active ? 'Exit fullscreen' : 'Fullscreen';
   draw();
 }
+function toggleControlDrawer() {
+  const drawer = $('#control-drawer'), control = $('#drawer-toggle'), open = !drawer.classList.contains('is-open');
+  drawer.classList.toggle('is-open', open); control.setAttribute('aria-expanded', String(open));
+}
 async function loadTiles() {
   const base = '/public/data/woven-tiles', manifest = await fetch(`${base}/manifest.json`).then((response) => response.json());
   await Promise.all(LOD_KEYS.flatMap((lod, modeIndex) => ['artist', 'work'].map(async (layer) => {
@@ -245,5 +412,5 @@ async function loadTiles() {
     tiles.set(`${modeIndex}:${layer}`, {...info, cells: text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))});
   })));
 }
-async function init() { data = await fetch('/public/data/woven-sample.json').then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; setAnimationSpeed(); $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; selectedLink = undefined; update(); }); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); $('#fullscreen').addEventListener('click', toggleFullscreen); document.addEventListener('fullscreenchange', syncFullscreenControl); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); update(); }
+async function init() { data = await fetch('/public/data/woven-sample.json').then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; selectedLink = undefined; update(); }); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setReverbAmount(Number(reverbControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); update(); }
 init();

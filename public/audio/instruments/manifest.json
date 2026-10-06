@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "instruments": [
+    {
+      "id": "musescore-general-hq-piano",
+      "name": "Piano — MuseScore General HQ",
+      "manifest": "/public/audio/instruments/musescore-general-hq-piano/manifest.json",
+      "license": "MIT",
+      "attribution": "MuseScore_General-HQ / S. Christian Collins; FluidR3 contributors"
+    }
+  ]
+}

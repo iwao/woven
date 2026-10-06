@@ -14,16 +14,29 @@ const program = gl.createProgram(); gl.attachShader(program, shader(gl.VERTEX_SH
 const pointBuffer = gl.createBuffer(), positionLoc = gl.getAttribLocation(program, 'a_position'), colorLoc = gl.getAttribLocation(program, 'a_color'), sizeLoc = gl.getAttribLocation(program, 'a_size');
 const uniforms = Object.fromEntries(['u_resolution', 'u_center', 'u_pan', 'u_scale', 'u_pixel_ratio'].map((name) => [name, gl.getUniformLocation(program, name)]));
 const LOD_LABELS = ['Overview', 'Cluster', 'Artist'];
-let data, selected = 'all', yearIndex = 0, lodIndex = 1, cameraZoom = 1, cameraPan = {x: 0, y: 0}, dragState, ignoreNextClick = false, sound = false, glowVolume = .8, clackVolume = .1, reverbAmount = .6, audio, audioBus, reverbBus, glowBus, clackBus, glowInstrument = 'synth', weaveClackId, selectedLink;
+const rgb = (hex) => hex.match(/\w\w/g).slice(0, 3).map((value) => parseInt(value, 16) / 255);
+const PALETTES = {
+  '1': {name: 'No.1 — Jet black', paper: '#050505', base: '#1f7a8c', bright: '#bfdbf7', accent: '#e1e5f2', outgoing: '#ffffff', incoming: '#bfdbf7'},
+  '2': {name: 'No.2 — Wisteria', paper: '#050505', base: '#53687e', bright: '#f5e9e2', accent: '#98a6d4', outgoing: '#f5e9e2', incoming: '#7871aa'},
+  '3': {name: 'No.3 — Tangerine', paper: '#050505', base: '#4ce0b3', bright: '#ffaf87', accent: '#ff8e72', outgoing: '#ed6a5e', incoming: '#ffaf87'},
+  '4': {name: 'No.4 — Prussian blue', paper: '#050505', base: '#0353a4', bright: '#b9d6f2', accent: '#006daa', outgoing: '#b9d6f2', incoming: '#003559'},
+  '5': {name: 'No.5 — Honey bronze', paper: '#050505', base: '#eec170', bright: '#f2a65a', accent: '#f58549', outgoing: '#f58549', incoming: '#772f1a'},
+};
+let paletteId = '5', palette = PALETTES[paletteId];
+function paletteRgbValues(value) { return Object.fromEntries(['paper', 'base', 'bright', 'accent', 'outgoing', 'incoming'].map((key) => [key, rgb(value[key])])); }
+let paletteColors = paletteRgbValues(palette);
+let data, selected = 'all', yearIndex = 0, lodIndex = 1, cameraZoom = 1, cameraPan = {x: 0, y: 0}, dragState, ignoreNextClick = false, sound = false, glowVolume = .5, highlightVolume = .15, clackVolume = .1, bassoVolume = .3, reverbAmount = .6, audio, audioBus, reverbBus, glowBus, highlightBus, clackBus, bassoBus, glowInstrument = 'synth', weaveClackId, selectedLink;
 let relationCache = {key: '', raw: [], works: new Map(), artists: new Map()};
 let tileCache = new Map(), tiles = new Map();
 const compactScaleCache = new WeakMap();
 const yearDeltaCache = new Map();
 const artistOverlayCache = new Map();
 const overlayPulseCellCache = new Map();
+const bassoSampleCache = new Map();
 let yearAnimation, animationFrame;
 const LOD_KEYS = ['overview', 'cluster', 'artist'];
 const YEAR_DURATION_AT_1X = 1400;
+const BASSO_X_BANDS = 7;
 const INSTRUMENT_CATALOG_URL = '/public/audio/instruments/manifest.json';
 const WAVE_CATALOG_URL = '/public/audio/wave/manifest.json';
 const DEFAULT_WEAVE_CLACK = '489000__phonosupf__wood-bell.wav';
@@ -56,6 +69,21 @@ function yearDeltaColumns(modeIndex, layer, index) {
   }
   yearDeltaCache.set(key, columns); return columns;
 }
+function bassoSamples(temporalIndex) {
+  const key = `${temporalIndex}`, cached = bassoSampleCache.get(key); if (cached) return cached;
+  // The detail grid keeps the left-to-right phrasing stable across visual LOD.
+  const totals = Array.from({length: BASSO_X_BANDS}, () => ({weight: 0, cells: 0}));
+  for (const layer of ['artist', 'work']) {
+    const tile = tiles.get(`2:${layer}`), columns = yearDeltaColumns(2, layer, temporalIndex);
+    for (const [x, cells] of columns) {
+      const band = Math.min(BASSO_X_BANDS - 1, Math.floor(x / Math.max(1, tile.width) * BASSO_X_BANDS));
+      for (const cell of cells) { totals[band].weight += cell.weight; totals[band].cells += 1; }
+    }
+  }
+  const maxWeight = Math.max(1, ...totals.map((sample) => sample.weight));
+  const result = totals.map((sample, band) => ({...sample, band, intensity: Math.log1p(sample.weight) / Math.log1p(maxWeight)}));
+  bassoSampleCache.set(key, result); return result;
+}
 function compactScale(links) {
   const cached = compactScaleCache.get(links); if (cached) return cached;
   const weights = links.map((link) => link.weight).sort((left, right) => left - right);
@@ -77,7 +105,8 @@ function point(points, x, y, weight, max, selected, opacity, modeIndex = 2) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(max)), overview = modeIndex === 0, cluster = modeIndex === 1;
   const size = selected ? 6.6 : overview ? Math.min(4.2, 2 + Math.sqrt(weight) * .16) : cluster ? Math.min(4.8, 1.7 + Math.sqrt(weight) * .38) : Math.min(4.2, 1.1 + Math.sqrt(weight) * .44);
   const alpha = overview ? .075 + intensity * .5 : cluster ? .055 + intensity * .6 : .035 + intensity * .55;
-  if (selected) points.push(x, y, 1, .94, .68, opacity, size); else points.push(x, y, (190 + intensity * 51) / 255, (135 + intensity * 86) / 255, (45 + intensity * 75) / 255, alpha * opacity, size);
+  const color = selected ? paletteColors.bright : paletteColors.base, highlight = paletteColors.bright;
+  points.push(x, y, color[0] + (highlight[0] - color[0]) * intensity, color[1] + (highlight[1] - color[1]) * intensity, color[2] + (highlight[2] - color[2]) * intensity, (selected ? 1 : alpha) * opacity, size);
 }
 function lodLayers() {
   // Keep one stable level between transition bands, then cross-fade the
@@ -114,17 +143,17 @@ function appendLodLayer(points, modeIndex, opacity, width, height, maxWeight, te
     const cells = tileLinks(modeIndex, layer, temporalIndex), compact = modeIndex === 0, scale = compact ? compactScale(cells) : maxWeight;
     for (const cell of cells) point(points, 20 + (width - 40) * cell.x / Math.max(1, tile.width - 1), yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), cell.weight, scale, false, opacity, modeIndex);
   }
-  nodes.forEach((node, i) => points.push(layout.x(i), 54, .945, .808, .47, .72 * opacity, 4.4));
+  const color = paletteColors.accent; nodes.forEach((node, i) => points.push(layout.x(i), 54, ...color, .72 * opacity, 4.4));
 }
 function overlayPoint(points, x, y, weight, maxWeight, opacity, modeIndex) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(maxWeight));
   const boost = modeIndex === 0 ? 1.62 : modeIndex === 1 ? 1.27 : 1;
-  points.push(x, y, .31, .86, .48, (.64 + intensity * .34) * opacity, (3.2 + Math.sqrt(weight) * .28) * boost);
+  points.push(x, y, ...paletteColors.outgoing, (.64 + intensity * .34) * opacity, (3.2 + Math.sqrt(weight) * .28) * boost);
 }
 function reverseOverlayPoint(points, x, y, weight, maxWeight, opacity, modeIndex) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(maxWeight));
   const boost = modeIndex === 0 ? 1.35 : modeIndex === 1 ? 1.16 : 1;
-  points.push(x, y, 1, .54, .18, (.62 + intensity * .36) * opacity, (3.1 + Math.sqrt(weight) * .28) * boost);
+  points.push(x, y, ...paletteColors.incoming, (.62 + intensity * .36) * opacity, (3.1 + Math.sqrt(weight) * .28) * boost);
 }
 function artistOverlayLinks(artistId, temporalIndex) {
   const key = `${artistId}:${temporalIndex}`, cached = artistOverlayCache.get(key); if (cached) return cached;
@@ -189,7 +218,7 @@ function appendArtistOverlay(points, modeIndex, opacity, width, height, maxWeigh
   };
   drawCells('artist', incomingArtists, true); drawCells('work', reverseWorks, true); drawCells('artist', outgoingArtists, false); drawCells('work', outgoingWorks, false);
   const sourceTile = tiles.get(`${modeIndex}:artist`), sourceX = lodMatrixPixel(selectedArtist.position, data.artists.length, sourceTile.width, 1024);
-  points.push(20 + (width - 40) * sourceX / Math.max(1, sourceTile.width - 1), 54, .44, .9, 1, (.62 + sourceIntensity * .36) * opacity, 5.2 + Math.min(4.8, Math.sqrt(sourceWeight) * .16));
+  points.push(20 + (width - 40) * sourceX / Math.max(1, sourceTile.width - 1), 54, ...paletteColors.outgoing, (.62 + sourceIntensity * .36) * opacity, 5.2 + Math.min(4.8, Math.sqrt(sourceWeight) * .16));
 }
 function appendYearPulse(points, pulseCandidates, width, height) {
   if (!yearAnimation) return;
@@ -214,8 +243,8 @@ function appendYearPulse(points, pulseCandidates, width, height) {
           const flare = (1 - distance / .035) * opacity, size = (4 + Math.min(7, Math.sqrt(cell.weight) * .9)) * responsiveGlow;
           // Pulses are drawn in a separate additive pass: a broad halo keeps
           // new relations legible over an already bright late-year fabric.
-          points.push(xPosition, cellY, 1, .48, .08, .16 * flare, size * 3.4);
-          points.push(xPosition, cellY, 1, .91, .48, .98 * flare, size);
+          points.push(xPosition, cellY, ...paletteColors.accent, .16 * flare, size * 3.4);
+          points.push(xPosition, cellY, ...paletteColors.bright, .98 * flare, size);
           pulseCandidates.push({key: `${index}:${layer}:${x}:${cell.y}`, weight: cell.weight, highlighted: highlightedCells?.has(`${x}:${cell.y}`)});
         }
       }
@@ -223,7 +252,7 @@ function appendYearPulse(points, pulseCandidates, width, height) {
   }
 }
 function renderPoints(points, pulses, width, height, viewScale) {
-  const pixelRatio = devicePixelRatio, stride = 7 * 4; canvas.width = Math.round(width * pixelRatio); canvas.height = Math.round(height * pixelRatio); gl.viewport(0, 0, canvas.width, canvas.height); gl.clearColor(.063, .071, .059, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.useProgram(program); gl.bindBuffer(gl.ARRAY_BUFFER, pointBuffer); gl.enableVertexAttribArray(positionLoc); gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, stride, 0); gl.enableVertexAttribArray(colorLoc); gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, stride, 2 * 4); gl.enableVertexAttribArray(sizeLoc); gl.vertexAttribPointer(sizeLoc, 1, gl.FLOAT, false, stride, 6 * 4); gl.uniform2f(uniforms.u_resolution, width, height); gl.uniform2f(uniforms.u_center, width / 2, height / 2); gl.uniform2f(uniforms.u_pan, cameraPan.x, cameraPan.y); gl.uniform1f(uniforms.u_scale, viewScale); gl.uniform1f(uniforms.u_pixel_ratio, pixelRatio); gl.enable(gl.BLEND);
+  const pixelRatio = devicePixelRatio, stride = 7 * 4, background = paletteColors.paper; canvas.width = Math.round(width * pixelRatio); canvas.height = Math.round(height * pixelRatio); gl.viewport(0, 0, canvas.width, canvas.height); gl.clearColor(...background, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.useProgram(program); gl.bindBuffer(gl.ARRAY_BUFFER, pointBuffer); gl.enableVertexAttribArray(positionLoc); gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, stride, 0); gl.enableVertexAttribArray(colorLoc); gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, stride, 2 * 4); gl.enableVertexAttribArray(sizeLoc); gl.vertexAttribPointer(sizeLoc, 1, gl.FLOAT, false, stride, 6 * 4); gl.uniform2f(uniforms.u_resolution, width, height); gl.uniform2f(uniforms.u_center, width / 2, height / 2); gl.uniform2f(uniforms.u_pan, cameraPan.x, cameraPan.y); gl.uniform1f(uniforms.u_scale, viewScale); gl.uniform1f(uniforms.u_pixel_ratio, pixelRatio); gl.enable(gl.BLEND);
   const drawPass = (values, additive) => { if (!values.length) return; gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(values), gl.DYNAMIC_DRAW); gl.blendFunc(gl.SRC_ALPHA, additive ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA); gl.drawArrays(gl.POINTS, 0, values.length / 7); };
   drawPass(points, false); drawPass(pulses, true);
 }
@@ -233,7 +262,7 @@ function draw() {
   const timeStates = yearAnimation && dissolve > 0 ? [{index: yearIndex, opacity: 1 - dissolve}, {index: yearAnimation.yearIndex, opacity: dissolve}] : [{index: yearIndex, opacity: 1}];
   const allLinks = timeStates.flatMap((timeState) => layers.flatMap(({index}) => [...tileLinks(index, 'artist', timeState.index), ...tileLinks(index, 'work', timeState.index)]));
   const max = allLinks.reduce((largest, link) => Math.max(largest, link.weight), 1);
-  const points = [], pulses = [], pulseCandidates = [], viewScale = cameraScale(); constrainPan(rect.width, rect.height); timeStates.forEach((timeState) => layers.forEach(({index, opacity}) => { const layerOpacity = opacity * timeState.opacity; appendLodLayer(points, index, layerOpacity, rect.width, rect.height, max, timeState.index); appendArtistOverlay(points, index, layerOpacity, rect.width, rect.height, max, timeState.index); })); appendYearPulse(pulses, pulseCandidates, rect.width, rect.height); renderPoints(points, pulses, rect.width, rect.height, viewScale); playPulseCandidates(pulseCandidates);
+  const points = [], pulses = [], pulseCandidates = [], viewScale = cameraScale(); constrainPan(rect.width, rect.height); timeStates.forEach((timeState) => layers.forEach(({index, opacity}) => { const layerOpacity = opacity * timeState.opacity; appendLodLayer(points, index, layerOpacity, rect.width, rect.height, max, timeState.index); appendArtistOverlay(points, index, layerOpacity, rect.width, rect.height, max, timeState.index); })); appendYearPulse(pulses, pulseCandidates, rect.width, rect.height); renderPoints(points, pulses, rect.width, rect.height, viewScale); playPulseCandidates(pulseCandidates); playBassoContinuo();
 }
 function details(event) {
   if (selected === 'all') return;
@@ -280,15 +309,15 @@ function soundOutput(context) {
 }
 function soundChannel(context, channel) {
   soundOutput(context);
-  const existing = channel === 'glow' ? glowBus : clackBus;
+  const existing = channel === 'glow' ? glowBus : channel === 'highlight' ? highlightBus : channel === 'clack' ? clackBus : bassoBus;
   if (existing) return existing;
-  const bus = context.createGain(); bus.gain.value = channel === 'glow' ? glowVolume : clackVolume; bus.connect(audioBus);
-  if (channel === 'glow') glowBus = bus; else clackBus = bus;
+  const bus = context.createGain(); bus.gain.value = channel === 'glow' ? glowVolume : channel === 'highlight' ? highlightVolume : channel === 'clack' ? clackVolume : bassoVolume; bus.connect(audioBus);
+  if (channel === 'glow') glowBus = bus; else if (channel === 'highlight') highlightBus = bus; else if (channel === 'clack') clackBus = bus; else bassoBus = bus;
   return bus;
 }
 function setChannelVolume(channel, value) {
-  const output = channel === 'glow' ? '#glow-volume-value' : '#clack-volume-value', bus = channel === 'glow' ? glowBus : clackBus;
-  if (channel === 'glow') glowVolume = value; else clackVolume = value;
+  const output = channel === 'glow' ? '#glow-volume-value' : channel === 'highlight' ? '#highlight-volume-value' : channel === 'clack' ? '#clack-volume-value' : '#basso-volume-value', bus = channel === 'glow' ? glowBus : channel === 'highlight' ? highlightBus : channel === 'clack' ? clackBus : bassoBus;
+  if (channel === 'glow') glowVolume = value; else if (channel === 'highlight') highlightVolume = value; else if (channel === 'clack') clackVolume = value; else bassoVolume = value;
   $(output).textContent = `${Math.round(value * 100)}%`;
   if (bus && audio) bus.gain.setTargetAtTime(value, audio.currentTime, .025);
 }
@@ -413,8 +442,36 @@ function highlightTone(weight) {
     const oscillator = context.createOscillator(), gain = context.createGain(), filter = context.createBiquadFilter();
     oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(root * ratio, now); filter.type = 'highpass'; filter.frequency.value = 720;
     envelope(gain, now, level + amount * level * .75, .003, decay + amount * .12);
-    oscillator.connect(filter).connect(gain).connect(soundChannel(context, 'glow')); oscillator.start(now); oscillator.stop(now + decay + amount * .12 + .03);
+    oscillator.connect(filter).connect(gain).connect(soundChannel(context, 'highlight')); oscillator.start(now); oscillator.stop(now + decay + amount * .12 + .03);
   }
+}
+function bassoTone(sample, duration) {
+  const context = soundContext(); if (!context || !sample.weight) return;
+  const now = context.currentTime, amount = sample.intensity;
+  // A small palette reads as continuo rather than a second melody. The X band
+  // supplies slow harmonic motion; density opens the low-pass filter.
+  const degrees = [0, 3, 5, 7, 10, 7, 5], root = 49 * 2 ** (degrees[sample.band % degrees.length] / 12);
+  for (const [ratio, level] of [[1, 1], [2, .23], [3, .09]]) {
+    const oscillator = context.createOscillator(), gain = context.createGain(), filter = context.createBiquadFilter();
+    oscillator.type = ratio === 1 ? 'triangle' : 'sine'; oscillator.frequency.setValueAtTime(root * ratio, now);
+    filter.type = 'lowpass'; filter.frequency.setValueAtTime(240 + amount * 620, now); filter.Q.value = .8;
+    envelope(gain, now, (.018 + amount * .026) * level, .055, duration);
+    oscillator.connect(filter).connect(gain).connect(soundChannel(context, 'basso')); oscillator.start(now); oscillator.stop(now + duration + .12);
+  }
+}
+function playBassoContinuo() {
+  if (!yearAnimation || !sound) return;
+  const elapsed = performance.now() - yearAnimation.startedAt;
+  if (elapsed < 0 || elapsed >= yearAnimation.duration) return;
+  const sweepPhase = Math.min(1, elapsed / yearAnimation.duration / .68);
+  const band = Math.min(BASSO_X_BANDS - 1, Math.floor(sweepPhase * BASSO_X_BANDS));
+  if (yearAnimation.soundedBasso.has(band)) return;
+  yearAnimation.soundedBasso.add(band);
+  const sample = bassoSamples(yearAnimation.yearIndex)[band];
+  // Keep it sustained at the default tempo, then let slower playback stretch
+  // the woven phrase naturally.
+  const duration = Math.max(.58, Math.min(3.4, yearAnimation.duration / 1000 * .68 / BASSO_X_BANDS * 1.9));
+  bassoTone(sample, duration);
 }
 function playPulseCandidates(candidates) {
   if (!yearAnimation || !candidates.length) return;
@@ -445,7 +502,7 @@ function setAnimationSpeed() {
   yearAnimation.duration = nextDuration; yearAnimation.startedAt = performance.now() - phase * nextDuration;
 }
 function beginYearAnimation(targetIndex) {
-  yearAnimation = {yearIndex: targetIndex, startedAt: performance.now(), duration: animationDuration(), dissolveDuration: 260, soundedPulses: new Set(), lastToneAt: -Infinity};
+  yearAnimation = {yearIndex: targetIndex, startedAt: performance.now(), duration: animationDuration(), dissolveDuration: 260, soundedPulses: new Set(), soundedBasso: new Set(), lastToneAt: -Infinity};
   setDisplayedYear(targetIndex); weaveClack(); draw();
 }
 function animateYear() {
@@ -494,6 +551,11 @@ function toggleControlDrawer() {
   const drawer = $('#control-drawer'), control = $('#drawer-toggle'), open = !drawer.classList.contains('is-open');
   drawer.classList.toggle('is-open', open); control.setAttribute('aria-expanded', String(open));
 }
+function setPalette(id) {
+  paletteId = id; palette = PALETTES[id] || PALETTES['5'];
+  paletteColors = paletteRgbValues(palette);
+  draw();
+}
 async function loadTiles() {
   const base = '/public/data/woven-tiles', manifest = await fetch(`${base}/manifest.json`).then((response) => response.json());
   await Promise.all(LOD_KEYS.flatMap((lod, modeIndex) => ['artist', 'work'].map(async (layer) => {
@@ -501,7 +563,7 @@ async function loadTiles() {
     tiles.set(`${modeIndex}:${layer}`, {...info, cells: text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))});
   })));
 }
-async function init() { data = await fetch('/public/data/woven-sample.json').then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; selectedLink = undefined; update(); }); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setReverbAmount(Number(reverbControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); update(); }
+async function init() { data = await fetch('/public/data/woven-sample.json').then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'), paletteControl = $('#palette'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; selectedLink = undefined; update(); }); paletteControl.addEventListener('change', () => setPalette(paletteControl.value)); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setReverbAmount(Number(reverbControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); setPalette(paletteControl.value); }
 function setupArtistSearch() {
   const input = $('#artist-search'), results = $('#artist-results'), select = $('#artist'), normalise = (value) => value.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase();
   const choose = (artist) => { input.value = artist.name; select.value = artist.id; select.dispatchEvent(new Event('change')); results.hidden = true; input.setAttribute('aria-expanded', 'false'); };
@@ -517,4 +579,10 @@ function setupArtistSearch() {
   input.addEventListener('keydown', (event) => { if (event.key === 'Escape') { results.hidden = true; input.setAttribute('aria-expanded', 'false'); } if (event.key === 'Enter') { const exact = data.artists.find((artist) => normalise(artist.name) === normalise(input.value)); if (exact) { event.preventDefault(); choose(exact); } } });
   input.addEventListener('blur', () => setTimeout(() => { results.hidden = true; input.setAttribute('aria-expanded', 'false'); }, 120));
 }
-init().then(setupArtistSearch);
+init().then(() => {
+  setupArtistSearch();
+  for (const [channel, id] of [['basso', '#basso-volume'], ['highlight', '#highlight-volume']]) {
+    const control = $(id); setChannelVolume(channel, Number(control.value));
+    control.addEventListener('input', () => setChannelVolume(channel, Number(control.value)));
+  }
+});

@@ -35,6 +35,7 @@ const overlayPulseCellCache = new Map();
 const bassoSampleCache = new Map();
 let yearAnimation, animationFrame;
 const LOD_KEYS = ['overview', 'cluster', 'artist'];
+const WIDE_OVERVIEW_KEY = 'overview-wide';
 const YEAR_DURATION_AT_1X = 1400;
 const BASSO_X_BANDS = 7;
 const INSTRUMENT_CATALOG_URL = '/public/audio/instruments/manifest.json';
@@ -47,21 +48,24 @@ const GLOW_REFERENCE_SIZE = {width: 1280, height: 620};
 const instrumentCatalog = new Map(), loadedInstrumentPacks = new Map();
 const waveCatalog = new Map(), weaveClackBuffers = new Map(), weaveClackPromises = new Map();
 
+function tileKey(modeIndex) { return modeIndex === 0 && document.fullscreenElement === canvas ? WIDE_OVERVIEW_KEY : LOD_KEYS[modeIndex]; }
+function tileFor(modeIndex, layer) { return tiles.get(`${tileKey(modeIndex)}:${layer}`); }
+
 function visibleArtists() { return data.artists; }
 function cache() { const key = `${yearIndex}`; if (relationCache.key !== key) relationCache = {key, raw: null, works: new Map(), artists: new Map()}; return relationCache; }
 function rawLinks() { const current = cache(); if (current.raw) return current.raw; const links = new Map(), until = data.years[yearIndex]; for (const artist of visibleArtists()) for (const row of artist.series) { if (row.year > until) continue; for (const [work, value] of row.works) { const key = `${artist.id}:${work}`, old = links.get(key); links.set(key, {artist, work, weight: (old?.weight || 0) + value}); } } return current.raw = [...links.values()]; }
 function workLinks(modeIndex = lodIndex) { const current = cache(); if (current.works.has(modeIndex)) return current.works.get(modeIndex); const links = new Map(), positions = data._lodModes[modeIndex].positions; for (const link of rawLinks()) { const source = positions.get(link.artist.id); if (source === undefined) continue; const key = `${source}:${link.work}`, old = links.get(key); links.set(key, {source, target: link.work, weight: (old?.weight || 0) + link.weight}); } const result = [...links.values()]; current.works.set(modeIndex, result); return result; }
 function artistLinks(modeIndex = lodIndex) { const current = cache(); if (current.artists.has(modeIndex)) return current.artists.get(modeIndex); const links = new Map(), positions = data._lodModes[modeIndex].positions, until = data.years[yearIndex]; for (const relation of data.artistRelations) { if (relation.firstYear === null || relation.firstYear > until) continue; for (const [from, target] of [[relation.source, relation.target], [relation.target, relation.source]]) { const source = positions.get(from); if (source === undefined) continue; const key = `${source}:${target}`, old = links.get(key); links.set(key, {source, target, weight: (old?.weight || 0) + relation.weight, sharedWorks: (old?.sharedWorks || 0) + relation.sharedWorks}); } } const result = [...links.values()]; current.artists.set(modeIndex, result); return result; }
 function tileLinks(modeIndex, layer, temporalIndex = yearIndex) {
-  const key = `${temporalIndex}:${modeIndex}:${layer}`, cached = tileCache.get(key); if (cached) return cached;
-  const tile = tiles.get(`${modeIndex}:${layer}`), until = data.years[temporalIndex];
+  const key = `${temporalIndex}:${tileKey(modeIndex)}:${layer}`, cached = tileCache.get(key); if (cached) return cached;
+  const tile = tileFor(modeIndex, layer), until = data.years[temporalIndex];
   const result = tile.cells.map((cell) => ({...cell, weight: cell.deltas.reduce((sum, [year, weight]) => year <= until ? sum + weight : sum, 0)})).filter((cell) => cell.weight > 0);
   tileCache.set(key, result); return result;
 }
 function yearDeltaColumns(modeIndex, layer, index) {
-  const key = `${modeIndex}:${layer}:${index}`, cached = yearDeltaCache.get(key); if (cached) return cached;
+  const key = `${tileKey(modeIndex)}:${layer}:${index}`, cached = yearDeltaCache.get(key); if (cached) return cached;
   const year = data.years[index], columns = new Map();
-  for (const cell of tiles.get(`${modeIndex}:${layer}`).cells) {
+  for (const cell of tileFor(modeIndex, layer).cells) {
     const delta = cell.deltas.find(([cellYear]) => cellYear === year)?.[1];
     if (!delta) continue;
     const column = columns.get(cell.x) || [];
@@ -74,7 +78,7 @@ function bassoSamples(temporalIndex) {
   // The detail grid keeps the left-to-right phrasing stable across visual LOD.
   const totals = Array.from({length: BASSO_X_BANDS}, () => ({weight: 0, cells: 0}));
   for (const layer of ['artist', 'work']) {
-    const tile = tiles.get(`2:${layer}`), columns = yearDeltaColumns(2, layer, temporalIndex);
+    const tile = tileFor(2, layer), columns = yearDeltaColumns(2, layer, temporalIndex);
     for (const [x, cells] of columns) {
       const band = Math.min(BASSO_X_BANDS - 1, Math.floor(x / Math.max(1, tile.width) * BASSO_X_BANDS));
       for (const cell of cells) { totals[band].weight += cell.weight; totals[band].cells += 1; }
@@ -139,7 +143,7 @@ function constrainPan(width = canvas.clientWidth, height = canvas.clientHeight) 
 function appendLodLayer(points, modeIndex, opacity, width, height, maxWeight, temporalIndex = yearIndex) {
   const nodes = data._lodModes[modeIndex].nodes, layout = geometry(width, height, nodes.length);
   for (const layer of ['artist', 'work']) {
-    const tile = tiles.get(`${modeIndex}:${layer}`), yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
+    const tile = tileFor(modeIndex, layer), yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
     const cells = tileLinks(modeIndex, layer, temporalIndex), compact = modeIndex === 0, scale = compact ? compactScale(cells) : maxWeight;
     for (const cell of cells) point(points, 20 + (width - 40) * cell.x / Math.max(1, tile.width - 1), yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), cell.weight, scale, false, opacity, modeIndex);
   }
@@ -185,7 +189,7 @@ function lodMatrixPixel(index, count, resolution, detailResolution) {
   return resolution === detailResolution ? detailPixel : matrixPixel(detailPixel, detailResolution, resolution);
 }
 function foldOverlayLinks(modeIndex, layer, links) {
-  const tile = tiles.get(`${modeIndex}:${layer}`), targetCount = layer === 'artist' ? data.artists.length : data.works.length, cells = new Map();
+  const tile = tileFor(modeIndex, layer), targetCount = layer === 'artist' ? data.artists.length : data.works.length, cells = new Map();
   for (const link of links) {
     const source = data._artistsById.get(link.source), target = layer === 'artist' ? data._artistsById.get(link.target) : data._worksById.get(link.target);
     if (!source || !target) continue;
@@ -217,7 +221,7 @@ function appendArtistOverlay(points, modeIndex, opacity, width, height, maxWeigh
     }
   };
   drawCells('artist', incomingArtists, true); drawCells('work', reverseWorks, true); drawCells('artist', outgoingArtists, false); drawCells('work', outgoingWorks, false);
-  const sourceTile = tiles.get(`${modeIndex}:artist`), sourceX = lodMatrixPixel(selectedArtist.position, data.artists.length, sourceTile.width, 1024);
+  const sourceTile = tileFor(modeIndex, 'artist'), sourceX = lodMatrixPixel(selectedArtist.position, data.artists.length, sourceTile.width, 1024);
   points.push(20 + (width - 40) * sourceX / Math.max(1, sourceTile.width - 1), 54, ...paletteColors.outgoing, (.62 + sourceIntensity * .36) * opacity, 5.2 + Math.min(4.8, Math.sqrt(sourceWeight) * .16));
 }
 function appendYearPulse(points, pulseCandidates, width, height) {
@@ -229,7 +233,7 @@ function appendYearPulse(points, pulseCandidates, width, height) {
   for (const {index, opacity} of lodLayers()) {
     const layout = geometry(width, height, data._lodModes[index].nodes.length);
     for (const layer of ['artist', 'work']) {
-      const tile = tiles.get(`${index}:${layer}`), yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
+      const tile = tileFor(index, layer), yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
       const first = Math.max(0, Math.ceil((phase - columnSpan) / columnDelay * (tile.width - 1))), last = Math.min(tile.width - 1, Math.floor(phase / columnDelay * (tile.width - 1)));
       const columns = yearDeltaColumns(index, layer, yearAnimation.yearIndex);
       const highlightedCells = overlayPulseCells(index, layer, yearAnimation.yearIndex);
@@ -558,9 +562,9 @@ function setPalette(id) {
 }
 async function loadTiles() {
   const base = '/public/data/woven-tiles', manifest = await fetch(`${base}/manifest.json`).then((response) => response.json());
-  await Promise.all(LOD_KEYS.flatMap((lod, modeIndex) => ['artist', 'work'].map(async (layer) => {
+  await Promise.all([...LOD_KEYS, WIDE_OVERVIEW_KEY].flatMap((lod) => ['artist', 'work'].map(async (layer) => {
     const info = manifest.layers[`${lod}/${layer}`], text = await fetch(`${base}/${info.artifact}`).then((response) => response.text());
-    tiles.set(`${modeIndex}:${layer}`, {...info, cells: text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))});
+    tiles.set(`${lod}:${layer}`, {...info, cells: text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))});
   })));
 }
 async function init() { data = await fetch('/public/data/woven-sample.json').then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'), paletteControl = $('#palette'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; selectedLink = undefined; update(); }); paletteControl.addEventListener('change', () => setPalette(paletteControl.value)); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setReverbAmount(Number(reverbControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); setPalette(paletteControl.value); }

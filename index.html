@@ -13,7 +13,8 @@
         <p class="drawer-kicker">WOVEN CONTROLS</p>
         <section class="control-group" aria-labelledby="view-controls-title">
           <h2 id="view-controls-title">View</h2>
-          <label>Artist <select id="artist"><option value="all">All artists</option></select></label>
+          <label class="artist-overlay-control">Artist overlay <input class="artist-search" id="artist-search" type="search" placeholder="Type an artist name…" autocomplete="off" aria-autocomplete="list" aria-controls="artist-results" aria-expanded="false" /><div class="artist-results" id="artist-results" role="listbox" hidden></div></label>
+          <select id="artist" hidden aria-hidden="true"><option value="all">No overlay</option></select>
           <label class="year-control">Year <input id="year" type="range" /><output id="year-value"></output></label>
           <button id="play-years" aria-pressed="false" title="Animate annual additions">Play years</button>
           <label class="speed-control">Animation speed <input id="animation-speed" type="range" min="0.25" max="2" value="0.65" step="0.05" /><output id="animation-speed-value">0.65×</output></label>
@@ -32,7 +33,7 @@
       </div>
     </aside>
     <main>
-      <section class="fabric-wrap"><canvas id="fabric" aria-label="Artist relation temporal field; use a mouse wheel, two-finger trackpad scroll, or pinch gesture to change Artist semantic zoom"></canvas><div class="legend"><span></span> Artist × Artist / Artist × Work crosses · brighter = greater relation weight · scroll or pinch = Artist zoom · click a cross</div></section>
+      <section class="fabric-wrap"><canvas id="fabric" aria-label="Artist relation temporal field; use a mouse wheel, two-finger trackpad scroll, or pinch gesture to change Artist semantic zoom"></canvas><div class="legend"><span></span> Artist × Artist / Artist × Work crosses · brighter = greater relation weight · <i class="overlay-source"></i>outgoing / <i class="overlay-reverse"></i>incoming artist overlay · scroll or pinch = Artist zoom</div></section>
       <footer><span id="metrics"></span><span id="scope" hidden></span><span>Sample asset · no live database connection</span></footer>
     </main>
     <script type="module" src="/src/app.js"></script>

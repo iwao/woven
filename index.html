@@ -16,6 +16,8 @@
       <section class="controls" aria-label="WOVEN controls">
         <label>Artist <select id="artist"><option value="all">All artists</option></select></label>
         <label class="year-control">Year <input id="year" type="range" /><output id="year-value"></output></label>
+        <button id="play-years" aria-pressed="false" title="Animate annual additions">Play years</button>
+        <label class="speed-control">Animation speed <input id="animation-speed" type="range" min="0.25" max="2" value="0.65" step="0.05" /><output id="animation-speed-value">0.65×</output></label>
         <label class="zoom-control">Semantic zoom <input id="zoom" type="range" min="0" max="2" step="1" /><output id="zoom-value"></output></label>
       </section>
       <section class="fabric-wrap"><canvas id="fabric" aria-label="Artist relation temporal field; use a mouse wheel, two-finger trackpad scroll, or pinch gesture to change Artist semantic zoom"></canvas><div class="legend"><span></span> Artist × Artist / Artist × Work crosses · brighter = greater relation weight · scroll or pinch = Artist zoom · click a cross</div></section>

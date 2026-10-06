@@ -18,18 +18,32 @@ let data, selected = 'all', yearIndex = 0, lodIndex = 1, cameraZoom = 1, cameraP
 let relationCache = {key: '', raw: [], works: new Map(), artists: new Map()};
 let tileCache = new Map(), tiles = new Map();
 const compactScaleCache = new WeakMap();
+const yearDeltaCache = new Map();
+let yearAnimation, animationFrame;
 const LOD_KEYS = ['overview', 'cluster', 'artist'];
+const YEAR_DURATION_AT_1X = 1400;
 
 function visibleArtists() { return selected === 'all' ? data.artists : data.artists.filter((a) => a.id === selected); }
 function cache() { const key = `${yearIndex}:${selected}`; if (relationCache.key !== key) relationCache = {key, raw: null, works: new Map(), artists: new Map()}; return relationCache; }
 function rawLinks() { const current = cache(); if (current.raw) return current.raw; const links = new Map(), until = data.years[yearIndex]; for (const artist of visibleArtists()) for (const row of artist.series) { if (row.year > until) continue; for (const [work, value] of row.works) { const key = `${artist.id}:${work}`, old = links.get(key); links.set(key, {artist, work, weight: (old?.weight || 0) + value}); } } return current.raw = [...links.values()]; }
 function workLinks(modeIndex = lodIndex) { const current = cache(); if (current.works.has(modeIndex)) return current.works.get(modeIndex); const links = new Map(), positions = data._lodModes[modeIndex].positions; for (const link of rawLinks()) { const source = positions.get(link.artist.id); if (source === undefined) continue; const key = `${source}:${link.work}`, old = links.get(key); links.set(key, {source, target: link.work, weight: (old?.weight || 0) + link.weight}); } const result = [...links.values()]; current.works.set(modeIndex, result); return result; }
 function artistLinks(modeIndex = lodIndex) { const current = cache(); if (current.artists.has(modeIndex)) return current.artists.get(modeIndex); const links = new Map(), positions = data._lodModes[modeIndex].positions, until = data.years[yearIndex]; for (const relation of data.artistRelations) { if (relation.firstYear === null || relation.firstYear > until) continue; for (const [from, target] of [[relation.source, relation.target], [relation.target, relation.source]]) { if (selected !== 'all' && from !== selected) continue; const source = positions.get(from); if (source === undefined) continue; const key = `${source}:${target}`, old = links.get(key); links.set(key, {source, target, weight: (old?.weight || 0) + relation.weight, sharedWorks: (old?.sharedWorks || 0) + relation.sharedWorks}); } } const result = [...links.values()]; current.artists.set(modeIndex, result); return result; }
-function tileLinks(modeIndex, layer) {
-  const key = `${yearIndex}:${modeIndex}:${layer}`, cached = tileCache.get(key); if (cached) return cached;
-  const tile = tiles.get(`${modeIndex}:${layer}`), until = data.years[yearIndex];
+function tileLinks(modeIndex, layer, temporalIndex = yearIndex) {
+  const key = `${temporalIndex}:${modeIndex}:${layer}`, cached = tileCache.get(key); if (cached) return cached;
+  const tile = tiles.get(`${modeIndex}:${layer}`), until = data.years[temporalIndex];
   const result = tile.cells.map((cell) => ({...cell, weight: cell.deltas.reduce((sum, [year, weight]) => year <= until ? sum + weight : sum, 0)})).filter((cell) => cell.weight > 0);
   tileCache.set(key, result); return result;
+}
+function yearDeltaColumns(modeIndex, layer, index) {
+  const key = `${modeIndex}:${layer}:${index}`, cached = yearDeltaCache.get(key); if (cached) return cached;
+  const year = data.years[index], columns = new Map();
+  for (const cell of tiles.get(`${modeIndex}:${layer}`).cells) {
+    const delta = cell.deltas.find(([cellYear]) => cellYear === year)?.[1];
+    if (!delta) continue;
+    const column = columns.get(cell.x) || [];
+    column.push({...cell, weight: delta}); columns.set(cell.x, column);
+  }
+  yearDeltaCache.set(key, columns); return columns;
 }
 function compactScale(links) {
   const cached = compactScaleCache.get(links); if (cached) return cached;
@@ -73,12 +87,12 @@ function constrainPan(width = canvas.clientWidth, height = canvas.clientHeight) 
   cameraPan.x = Math.max(minX, Math.min(maxX, cameraPan.x));
   cameraPan.y = Math.max(minY, Math.min(maxY, cameraPan.y));
 }
-function appendLodLayer(points, modeIndex, opacity, width, height, maxWeight) {
+function appendLodLayer(points, modeIndex, opacity, width, height, maxWeight, temporalIndex = yearIndex) {
   const nodes = data._lodModes[modeIndex].nodes, layout = geometry(width, height, nodes.length);
   if (selected === 'all') {
     for (const layer of ['artist', 'work']) {
       const tile = tiles.get(`${modeIndex}:${layer}`), yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
-      const cells = tileLinks(modeIndex, layer), compact = modeIndex === 0, scale = compact ? compactScale(cells) : maxWeight;
+      const cells = tileLinks(modeIndex, layer, temporalIndex), compact = modeIndex === 0, scale = compact ? compactScale(cells) : maxWeight;
       for (const cell of cells) point(points, 20 + (width - 40) * cell.x / Math.max(1, tile.width - 1), yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), cell.weight, scale, false, opacity, compact);
     }
     nodes.forEach((node, i) => points.push(layout.x(i), 54, .945, .808, .47, .72 * opacity, 4.4));
@@ -89,13 +103,46 @@ function appendLodLayer(points, modeIndex, opacity, width, height, maxWeight) {
   for (const link of works) { const target = data._worksById.get(link.target); if (target) point(points, layout.x(link.source), layout.workY(target.index), link.weight, maxWeight, selectedLink === `w:${modeIndex}:${link.source}:${link.target}`, opacity); }
   nodes.forEach((node, i) => points.push(layout.x(i), 54, .945, .808, .47, .72 * opacity, 4.4));
 }
-function renderPoints(points, width, height, viewScale) {
-  const pixelRatio = devicePixelRatio, values = new Float32Array(points); canvas.width = Math.round(width * pixelRatio); canvas.height = Math.round(height * pixelRatio); gl.viewport(0, 0, canvas.width, canvas.height); gl.clearColor(.063, .071, .059, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.useProgram(program); gl.bindBuffer(gl.ARRAY_BUFFER, pointBuffer); gl.bufferData(gl.ARRAY_BUFFER, values, gl.DYNAMIC_DRAW); const stride = 7 * 4; gl.enableVertexAttribArray(positionLoc); gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, stride, 0); gl.enableVertexAttribArray(colorLoc); gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, stride, 2 * 4); gl.enableVertexAttribArray(sizeLoc); gl.vertexAttribPointer(sizeLoc, 1, gl.FLOAT, false, stride, 6 * 4); gl.uniform2f(uniforms.u_resolution, width, height); gl.uniform2f(uniforms.u_center, width / 2, height / 2); gl.uniform2f(uniforms.u_pan, cameraPan.x, cameraPan.y); gl.uniform1f(uniforms.u_scale, viewScale); gl.uniform1f(uniforms.u_pixel_ratio, pixelRatio); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.drawArrays(gl.POINTS, 0, values.length / 7); }
+function appendYearPulse(points, width, height) {
+  if (!yearAnimation || selected !== 'all') return;
+  const elapsed = performance.now() - yearAnimation.startedAt;
+  if (elapsed >= yearAnimation.duration) return;
+  const phase = elapsed / yearAnimation.duration, columnDelay = .68, columnSpan = 1 - columnDelay;
+  for (const {index, opacity} of lodLayers()) {
+    const layout = geometry(width, height, data._lodModes[index].nodes.length);
+    for (const layer of ['artist', 'work']) {
+      const tile = tiles.get(`${index}:${layer}`), yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
+      const first = Math.max(0, Math.ceil((phase - columnSpan) / columnDelay * (tile.width - 1))), last = Math.min(tile.width - 1, Math.floor(phase / columnDelay * (tile.width - 1)));
+      const columns = yearDeltaColumns(index, layer, yearAnimation.yearIndex);
+      for (let x = first; x <= last; x += 1) {
+        const columnPhase = (phase - x / Math.max(1, tile.width - 1) * columnDelay) / columnSpan;
+        if (columnPhase < 0 || columnPhase > 1) continue;
+        const xPosition = 20 + (width - 40) * x / Math.max(1, tile.width - 1), beamY = yTop + (yBottom - yTop) * columnPhase;
+        for (const cell of columns.get(x) || []) {
+          const cellY = yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), distance = Math.abs(cellY - beamY) / Math.max(1, yBottom - yTop);
+          if (distance > .035) continue;
+          const flare = (1 - distance / .035) * opacity, size = 4 + Math.min(7, Math.sqrt(cell.weight) * .9);
+          // Pulses are drawn in a separate additive pass: a broad halo keeps
+          // new relations legible over an already bright late-year fabric.
+          points.push(xPosition, cellY, 1, .48, .08, .16 * flare, size * 3.4);
+          points.push(xPosition, cellY, 1, .91, .48, .98 * flare, size);
+        }
+      }
+    }
+  }
+}
+function renderPoints(points, pulses, width, height, viewScale) {
+  const pixelRatio = devicePixelRatio, stride = 7 * 4; canvas.width = Math.round(width * pixelRatio); canvas.height = Math.round(height * pixelRatio); gl.viewport(0, 0, canvas.width, canvas.height); gl.clearColor(.063, .071, .059, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.useProgram(program); gl.bindBuffer(gl.ARRAY_BUFFER, pointBuffer); gl.enableVertexAttribArray(positionLoc); gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, stride, 0); gl.enableVertexAttribArray(colorLoc); gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, stride, 2 * 4); gl.enableVertexAttribArray(sizeLoc); gl.vertexAttribPointer(sizeLoc, 1, gl.FLOAT, false, stride, 6 * 4); gl.uniform2f(uniforms.u_resolution, width, height); gl.uniform2f(uniforms.u_center, width / 2, height / 2); gl.uniform2f(uniforms.u_pan, cameraPan.x, cameraPan.y); gl.uniform1f(uniforms.u_scale, viewScale); gl.uniform1f(uniforms.u_pixel_ratio, pixelRatio); gl.enable(gl.BLEND);
+  const drawPass = (values, additive) => { if (!values.length) return; gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(values), gl.DYNAMIC_DRAW); gl.blendFunc(gl.SRC_ALPHA, additive ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA); gl.drawArrays(gl.POINTS, 0, values.length / 7); };
+  drawPass(points, false); drawPass(pulses, true);
+}
 function draw() {
   const rect = canvas.getBoundingClientRect();
-  const layers = lodLayers(), allLinks = layers.flatMap(({index}) => selected === 'all' ? [...tileLinks(index, 'artist'), ...tileLinks(index, 'work')] : [...artistLinks(index), ...workLinks(index)]);
+  const layers = lodLayers(), elapsed = yearAnimation ? performance.now() - yearAnimation.startedAt : 0, dissolve = yearAnimation ? Math.max(0, Math.min(1, (elapsed - yearAnimation.duration) / yearAnimation.dissolveDuration)) : 0;
+  const timeStates = yearAnimation && dissolve > 0 ? [{index: yearIndex, opacity: 1 - dissolve}, {index: yearAnimation.yearIndex, opacity: dissolve}] : [{index: yearIndex, opacity: 1}];
+  const allLinks = timeStates.flatMap((timeState) => layers.flatMap(({index}) => selected === 'all' ? [...tileLinks(index, 'artist', timeState.index), ...tileLinks(index, 'work', timeState.index)] : [...artistLinks(index), ...workLinks(index)]));
   const max = allLinks.reduce((largest, link) => Math.max(largest, link.weight), 1);
-  const points = [], viewScale = cameraScale(); constrainPan(rect.width, rect.height); layers.forEach(({index, opacity}) => appendLodLayer(points, index, opacity, rect.width, rect.height, max)); renderPoints(points, rect.width, rect.height, viewScale);
+  const points = [], pulses = [], viewScale = cameraScale(); constrainPan(rect.width, rect.height); timeStates.forEach((timeState) => layers.forEach(({index, opacity}) => appendLodLayer(points, index, opacity * timeState.opacity, rect.width, rect.height, max, timeState.index))); appendYearPulse(pulses, rect.width, rect.height); renderPoints(points, pulses, rect.width, rect.height, viewScale);
 }
 function details(event) {
   if (selected === 'all') return;
@@ -120,6 +167,40 @@ function details(event) {
 }
 function beat(value) { if (!sound) return; audio ||= new AudioContext(); const now = audio.currentTime, oscillator = audio.createOscillator(), gain = audio.createGain(); oscillator.frequency.setValueAtTime(70 + Math.min(180, value * 8), now); gain.gain.setValueAtTime(.0001, now); gain.gain.exponentialRampToValueAtTime(.12, now + .006); gain.gain.exponentialRampToValueAtTime(.0001, now + .13); oscillator.connect(gain).connect(audio.destination); oscillator.start(now); oscillator.stop(now + .14); }
 function update() { $('#year-value').textContent = data.years[yearIndex]; beat(visibleArtists().flatMap((a) => a.series).find((row) => row.year === data.years[yearIndex])?.delta || 0); draw(); }
+function setDisplayedYear(index) { $('#year').value = index; $('#year-value').textContent = data.years[index]; }
+function stopYearAnimation(commit = true) {
+  const pending = yearAnimation;
+  if (pending && commit) { yearIndex = pending.yearIndex; setDisplayedYear(yearIndex); }
+  yearAnimation = undefined; if (animationFrame) cancelAnimationFrame(animationFrame); animationFrame = undefined;
+  const control = $('#play-years'); control.setAttribute('aria-pressed', 'false'); control.textContent = 'Play years';
+  if (pending && commit) draw();
+}
+function animationDuration() { return YEAR_DURATION_AT_1X / Number($('#animation-speed').value); }
+function setAnimationSpeed() {
+  const control = $('#animation-speed'), nextDuration = animationDuration(); $('#animation-speed-value').textContent = `${Number(control.value).toFixed(2)}×`;
+  if (!yearAnimation) return;
+  const phase = Math.min(1, (performance.now() - yearAnimation.startedAt) / yearAnimation.duration);
+  yearAnimation.duration = nextDuration; yearAnimation.startedAt = performance.now() - phase * nextDuration;
+}
+function beginYearAnimation(targetIndex) {
+  yearAnimation = {yearIndex: targetIndex, startedAt: performance.now(), duration: animationDuration(), dissolveDuration: 260};
+  setDisplayedYear(targetIndex); beat(visibleArtists().flatMap((artist) => artist.series).find((row) => row.year === data.years[targetIndex])?.delta || 0); draw();
+}
+function animateYear() {
+  draw();
+  if (!yearAnimation) return;
+  if (performance.now() - yearAnimation.startedAt < yearAnimation.duration + yearAnimation.dissolveDuration) { animationFrame = requestAnimationFrame(animateYear); return; }
+  yearIndex = yearAnimation.yearIndex;
+  if (yearIndex >= data.years.length - 1) { stopYearAnimation(false); update(); return; }
+  selectedLink = undefined; beginYearAnimation(yearIndex + 1); animationFrame = requestAnimationFrame(animateYear);
+}
+function playYears() {
+  if (yearAnimation) { stopYearAnimation(); return; }
+  if (selected !== 'all') { selected = 'all'; $('#artist').value = 'all'; }
+  if (yearIndex >= data.years.length - 1) yearIndex = -1;
+  const targetIndex = Math.min(data.years.length - 1, yearIndex + 1);
+  const control = $('#play-years'); control.setAttribute('aria-pressed', 'true'); control.textContent = 'Stop'; beginYearAnimation(targetIndex); animationFrame = requestAnimationFrame(animateYear);
+}
 function setCameraZoom(next, zoomControl) {
   const bounded = Math.max(-.25, Math.min(2.75, next));
   if (Math.abs(bounded - cameraZoom) < .001) return false;
@@ -146,5 +227,5 @@ async function loadTiles() {
     tiles.set(`${modeIndex}:${layer}`, {...info, cells: text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))});
   })));
 }
-async function init() { data = await fetch('/public/data/woven-sample.json').then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { selected = select.value; selectedLink = undefined; update(); }); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); update(); }
+async function init() { data = await fetch('/public/data/woven-sample.json').then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; setAnimationSpeed(); $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; selectedLink = undefined; update(); }); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); update(); }
 init();

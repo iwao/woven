@@ -97,11 +97,20 @@ function compactScale(links) {
 
 function prepareLod() {
   const byId = new Map(data.lod.tree.map((node) => [node.id, node])), byArtist = new Map(data.artists.map((artist, index) => [artist.id, index])), leaves = new Map(data.lod.tree.filter((node) => node.artist).map((node) => [node.artist, node.id])), minimum = new Map();
-  const position = (id) => { if (minimum.has(id)) return minimum.get(id); const node = byId.get(id), value = node.artist ? byArtist.get(node.artist) : Math.min(...node.children.map(position)); minimum.set(id, value); return value; };
+  // The production semantic tree can be thousands of levels deep.  Compute
+  // leftmost-leaf positions with an explicit post-order traversal rather than
+  // recursive child maps, which overflow the browser call stack.
+  const rootId = data.lod.root_node_id, traversal = [[rootId, false]];
+  while (traversal.length) {
+    const [id, visited] = traversal.pop(), node = byId.get(id);
+    if (visited) minimum.set(id, node.artist ? byArtist.get(node.artist) : Math.min(...node.children.map((child) => minimum.get(child))));
+    else { traversal.push([id, true]); if (!node.artist) for (const child of node.children) traversal.push([child, false]); }
+  }
+  const position = (id) => minimum.get(id);
   const root = byId.get(data.lod.root_node_id), overview = [...root.children].sort((a, b) => position(a) - position(b)), cluster = [...overview];
   while (cluster.length < 240) { const candidates = cluster.filter((id) => byId.get(id).children.length); if (!candidates.length) break; const largest = candidates.sort((a, b) => byId.get(b).leaves - byId.get(a).leaves || position(a) - position(b))[0]; cluster.splice(cluster.indexOf(largest), 1, ...byId.get(largest).children); }
   cluster.sort((a, b) => position(a) - position(b));
-  data._lodModes = [overview, cluster, data.artists.map((a) => leaves.get(a.id))].map((ids) => { const positions = new Map(); const assign = (id, index) => { const node = byId.get(id); if (node.artist) positions.set(node.artist, index); else node.children.forEach((child) => assign(child, index)); }; ids.forEach(assign); return {nodes: ids.map((id) => byId.get(id)), positions}; });
+  data._lodModes = [overview, cluster, data.artists.map((a) => leaves.get(a.id))].map((ids) => { const positions = new Map(); ids.forEach((id, index) => { const descendants = [id]; while (descendants.length) { const node = byId.get(descendants.pop()); if (node.artist) positions.set(node.artist, index); else descendants.push(...node.children); } }); return {nodes: ids.map((id) => byId.get(id)), positions}; });
   data._artistsById = new Map(data.artists.map((artist) => [artist.id, artist])); data._worksById = new Map(data.works.map((work, index) => [work.id, {...work, index}]));
 }
 function geometry(width, height, count) { const artistTop = 116, artistBottom = Math.max(178, height * .29), workTop = artistBottom + 38, workBottom = height - 30; return {x: (i) => 20 + (width - 40) * i / Math.max(1, count - 1), artistY: (i) => artistTop + (artistBottom - artistTop) * i / Math.max(1, data.artists.length - 1), workY: (i) => workTop + (workBottom - workTop) * i / Math.max(1, data.works.length - 1), artistTop, artistBottom, workTop, workBottom}; }

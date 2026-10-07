@@ -32,12 +32,15 @@ const compactScaleCache = new WeakMap();
 const yearDeltaCache = new Map();
 const artistOverlayCache = new Map();
 const overlayPulseCellCache = new Map();
+const overlayRenderCache = new Map();
 const bassoSampleCache = new Map();
 let yearAnimation, animationFrame;
 const LOD_KEYS = ['overview', 'cluster', 'artist'];
 const WIDE_OVERVIEW_KEY = 'overview-wide';
 const YEAR_DURATION_AT_1X = 1400;
 const BASSO_X_BANDS = 7;
+const ARTIST_OVERLAY_CACHE_LIMIT = 2;
+const OVERLAY_RENDER_CACHE_LIMIT = 24;
 const INSTRUMENT_CATALOG_URL = '/public/audio/instruments/manifest.json';
 const WAVE_CATALOG_URL = '/public/audio/wave/manifest.json';
 const DEFAULT_WEAVE_CLACK = '489000__phonosupf__wood-bell.wav';
@@ -52,6 +55,8 @@ function tileKey(modeIndex) { return modeIndex === 0 && document.fullscreenEleme
 function tileFor(modeIndex, layer) { return tiles.get(`${tileKey(modeIndex)}:${layer}`); }
 
 function visibleArtists() { return data.artists; }
+function rememberBounded(map, key, value, limit) { if (map.has(key)) map.delete(key); map.set(key, value); while (map.size > limit) map.delete(map.keys().next().value); return value; }
+function clearOverlayCaches() { artistOverlayCache.clear(); overlayPulseCellCache.clear(); overlayRenderCache.clear(); }
 function cache() { const key = `${yearIndex}`; if (relationCache.key !== key) relationCache = {key, raw: null, works: new Map(), artists: new Map()}; return relationCache; }
 function rawLinks() { const current = cache(); if (current.raw) return current.raw; const links = new Map(), until = data.years[yearIndex]; for (const artist of visibleArtists()) for (const row of artist.series) { if (row.year > until) continue; for (const [work, value] of row.works) { const key = `${artist.id}:${work}`, old = links.get(key); links.set(key, {artist, work, weight: (old?.weight || 0) + value}); } } return current.raw = [...links.values()]; }
 function workLinks(modeIndex = lodIndex) { const current = cache(); if (current.works.has(modeIndex)) return current.works.get(modeIndex); const links = new Map(), positions = data._lodModes[modeIndex].positions; for (const link of rawLinks()) { const source = positions.get(link.artist.id); if (source === undefined) continue; const key = `${source}:${link.work}`, old = links.get(key); links.set(key, {source, target: link.work, weight: (old?.weight || 0) + link.weight}); } const result = [...links.values()]; current.works.set(modeIndex, result); return result; }
@@ -169,7 +174,7 @@ function reverseOverlayPoint(points, x, y, weight, maxWeight, opacity, modeIndex
   points.push(x, y, ...paletteColors.incoming, (.62 + intensity * .36) * opacity, (3.1 + Math.sqrt(weight) * .28) * boost);
 }
 function artistOverlayLinks(artistId, temporalIndex) {
-  const key = `${artistId}:${temporalIndex}`, cached = artistOverlayCache.get(key); if (cached) return cached;
+  const key = `${artistId}:${temporalIndex}`, cached = artistOverlayCache.get(key); if (cached) return rememberBounded(artistOverlayCache, key, cached, ARTIST_OVERLAY_CACHE_LIMIT);
   const artist = data._artistsById.get(artistId), until = data.years[temporalIndex], works = new Map(), artists = new Map(), reverseArtists = new Map(), reverseWorks = new Map();
   if (!artist) return undefined;
   for (const row of artist.series) if (row.year <= until) for (const [work, weight] of row.works) works.set(work, (works.get(work) || 0) + weight);
@@ -190,7 +195,7 @@ function artistOverlayLinks(artistId, temporalIndex) {
     }
     if (sharedWeight) { artists.set(candidate.id, sharedWeight); reverseArtists.set(candidate.id, sharedWeight); }
   }
-  const result = {artist, works, artists, reverseArtists, reverseWorks: [...reverseWorks.values()]}; artistOverlayCache.set(key, result); return result;
+  const result = {artist, works, artists, reverseArtists, reverseWorks: [...reverseWorks.values()]}; return rememberBounded(artistOverlayCache, key, result, ARTIST_OVERLAY_CACHE_LIMIT);
 }
 function matrixPixel(index, count, resolution) { return Math.min(resolution - 1, Math.floor(index * resolution / Math.max(1, count))); }
 function lodMatrixPixel(index, count, resolution, detailResolution) {
@@ -207,29 +212,41 @@ function foldOverlayLinks(modeIndex, layer, links) {
   }
   return {tile, cells: [...cells.values()]};
 }
+function overlayRenderCells(artistId, modeIndex, temporalIndex) {
+  const key = `${artistId}:${temporalIndex}:${modeIndex}`, cached = overlayRenderCache.get(key); if (cached) return rememberBounded(overlayRenderCache, key, cached, OVERLAY_RENDER_CACHE_LIMIT);
+  const overlay = artistOverlayLinks(artistId, temporalIndex); if (!overlay) return undefined;
+  const outgoingArtists = [...overlay.artists].map(([target, weight]) => ({source: artistId, target, weight}));
+  const outgoingWorks = [...overlay.works].map(([target, weight]) => ({source: artistId, target, weight}));
+  const incomingArtists = [...overlay.reverseArtists].map(([source, weight]) => ({source, target: artistId, weight}));
+  return rememberBounded(overlayRenderCache, key, {
+    overlay,
+    artistIncoming: foldOverlayLinks(modeIndex, 'artist', incomingArtists),
+    workIncoming: foldOverlayLinks(modeIndex, 'work', overlay.reverseWorks),
+    artistOutgoing: foldOverlayLinks(modeIndex, 'artist', outgoingArtists),
+    workOutgoing: foldOverlayLinks(modeIndex, 'work', outgoingWorks),
+  }, OVERLAY_RENDER_CACHE_LIMIT);
+}
 function overlayPulseCells(modeIndex, layer, temporalIndex) {
   if (selected === 'all') return undefined;
   const key = `${selected}:${temporalIndex}:${modeIndex}:${layer}`, cached = overlayPulseCellCache.get(key); if (cached) return cached;
-  const overlay = artistOverlayLinks(selected, temporalIndex); if (!overlay) return undefined;
-  const outgoing = layer === 'artist' ? [...overlay.artists].map(([target, weight]) => ({source: selected, target, weight})) : [...overlay.works].map(([target, weight]) => ({source: selected, target, weight}));
-  const incoming = layer === 'artist' ? [...overlay.reverseArtists].map(([source, weight]) => ({source, target: selected, weight})) : overlay.reverseWorks;
-  const cells = new Set([...foldOverlayLinks(modeIndex, layer, outgoing).cells, ...foldOverlayLinks(modeIndex, layer, incoming).cells].map((cell) => `${cell.x}:${cell.y}`));
-  overlayPulseCellCache.set(key, cells); return cells;
+  const rendered = overlayRenderCells(selected, modeIndex, temporalIndex); if (!rendered) return undefined;
+  const suffix = layer === 'artist' ? 'artist' : 'work';
+  const cells = new Set([...rendered[`${suffix}Incoming`].cells, ...rendered[`${suffix}Outgoing`].cells].map((cell) => `${cell.x}:${cell.y}`));
+  return rememberBounded(overlayPulseCellCache, key, cells, OVERLAY_RENDER_CACHE_LIMIT);
 }
 function appendArtistOverlay(points, modeIndex, opacity, width, height, maxWeight, temporalIndex = yearIndex) {
   if (selected === 'all') return;
-  const overlay = artistOverlayLinks(selected, temporalIndex), selectedArtist = data._artistsById.get(selected);
-  if (!overlay || !selectedArtist) return;
-  const {works, artists, reverseArtists, reverseWorks} = overlay, layout = geometry(width, height, data._lodModes[modeIndex].nodes.length), sourceWeight = [...works.values()].reduce((sum, weight) => sum + weight, 0), sourceIntensity = Math.min(1, Math.log1p(sourceWeight) / Math.log1p(maxWeight));
-  const outgoingArtists = [...artists].map(([target, weight]) => ({source: selected, target, weight})), outgoingWorks = [...works].map(([target, weight]) => ({source: selected, target, weight})), incomingArtists = [...reverseArtists].map(([source, weight]) => ({source, target: selected, weight}));
-  const drawCells = (layer, links, reverse) => {
-    const {tile, cells} = foldOverlayLinks(modeIndex, layer, links), yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
+  const rendered = overlayRenderCells(selected, modeIndex, temporalIndex), selectedArtist = data._artistsById.get(selected);
+  if (!rendered || !selectedArtist) return;
+  const {overlay} = rendered, layout = geometry(width, height, data._lodModes[modeIndex].nodes.length), sourceWeight = [...overlay.works.values()].reduce((sum, weight) => sum + weight, 0), sourceIntensity = Math.min(1, Math.log1p(sourceWeight) / Math.log1p(maxWeight));
+  const drawCells = (layer, folded, reverse) => {
+    const {tile, cells} = folded, yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
     for (const cell of cells) {
       const x = 20 + (width - 40) * cell.x / Math.max(1, tile.width - 1), y = yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1);
       if (reverse) reverseOverlayPoint(points, x, y, cell.weight, maxWeight, opacity, modeIndex); else overlayPoint(points, x, y, cell.weight, maxWeight, opacity, modeIndex);
     }
   };
-  drawCells('artist', incomingArtists, true); drawCells('work', reverseWorks, true); drawCells('artist', outgoingArtists, false); drawCells('work', outgoingWorks, false);
+  drawCells('artist', rendered.artistIncoming, true); drawCells('work', rendered.workIncoming, true); drawCells('artist', rendered.artistOutgoing, false); drawCells('work', rendered.workOutgoing, false);
   const sourceTile = tileFor(modeIndex, 'artist'), sourceX = lodMatrixPixel(selectedArtist.position, data.artists.length, sourceTile.width, 1024);
   points.push(20 + (width - 40) * sourceX / Math.max(1, sourceTile.width - 1), 54, ...paletteColors.outgoing, (.62 + sourceIntensity * .36) * opacity, 5.2 + Math.min(4.8, Math.sqrt(sourceWeight) * .16));
 }
@@ -576,7 +593,7 @@ async function loadTiles() {
     tiles.set(`${lod}:${layer}`, {...info, cells: text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))});
   })));
 }
-async function init() { data = await fetch('/public/data/woven-sample.json').then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'), paletteControl = $('#palette'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; selectedLink = undefined; update(); }); paletteControl.addEventListener('change', () => setPalette(paletteControl.value)); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setReverbAmount(Number(reverbControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); setPalette(paletteControl.value); }
+async function init() { data = await fetch('/public/data/woven-sample.json').then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'), paletteControl = $('#palette'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; clearOverlayCaches(); selectedLink = undefined; update(); }); paletteControl.addEventListener('change', () => setPalette(paletteControl.value)); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); setPalette(paletteControl.value); }
 function setupArtistSearch() {
   const input = $('#artist-search'), results = $('#artist-results'), select = $('#artist'), normalise = (value) => value.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase();
   const choose = (artist) => { input.value = artist.name; select.value = artist.id; select.dispatchEvent(new Event('change')); results.hidden = true; input.setAttribute('aria-expanded', 'false'); };
@@ -593,6 +610,12 @@ function setupArtistSearch() {
   input.addEventListener('blur', () => setTimeout(() => { results.hidden = true; input.setAttribute('aria-expanded', 'false'); }, 120));
 }
 init().then(() => {
+  // Keep the reverb handler independent of the glow channel.  This listener
+  // also normalises the glow gain after the compact setup handler above.
+  $('#reverb-amount').addEventListener('input', () => {
+    setChannelVolume('glow', Number($('#glow-volume').value));
+    setReverbAmount(Number($('#reverb-amount').value));
+  });
   setupArtistSearch();
   for (const [channel, id] of [['basso', '#basso-volume'], ['highlight', '#highlight-volume']]) {
     const control = $(id); setChannelVolume(channel, Number(control.value));

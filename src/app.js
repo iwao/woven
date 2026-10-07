@@ -51,7 +51,7 @@ const GLOW_REFERENCE_SIZE = {width: 1280, height: 620};
 const instrumentCatalog = new Map(), loadedInstrumentPacks = new Map();
 const waveCatalog = new Map(), weaveClackBuffers = new Map(), weaveClackPromises = new Map();
 
-function tileKey(modeIndex) { return modeIndex === 0 && document.fullscreenElement === canvas ? WIDE_OVERVIEW_KEY : LOD_KEYS[modeIndex]; }
+function tileKey(modeIndex) { return modeIndex === 0 && document.fullscreenElement === canvas.parentElement ? WIDE_OVERVIEW_KEY : LOD_KEYS[modeIndex]; }
 function tileFor(modeIndex, layer) { return tiles.get(`${tileKey(modeIndex)}:${layer}`); }
 
 function visibleArtists() { return data.artists; }
@@ -515,8 +515,19 @@ function playPulseCandidates(candidates) {
   const highlights = fresh.filter((candidate) => candidate.highlighted);
   if (highlights.length) highlightTone(highlights.reduce((largest, candidate) => candidate.weight > largest.weight ? candidate : largest).weight);
 }
-function update() { $('#year-value').textContent = data.years[yearIndex]; draw(); }
-function setDisplayedYear(index) { $('#year').value = index; $('#year-value').textContent = data.years[index]; }
+function setCanvasYear(year, animate = true) {
+  const digits = String(year).padStart(4, '0').slice(-4), display = $('#canvas-year');
+  display.setAttribute('aria-label', `Current year: ${year}`);
+  [...display.children].forEach((digit, index) => {
+    const next = digits[index], value = digit.firstElementChild;
+    if (value.textContent === next) return;
+    digit.dataset.previous = value.textContent; value.textContent = next;
+    if (!animate) return;
+    digit.classList.remove('is-rolling'); void digit.offsetWidth; digit.classList.add('is-rolling');
+  });
+}
+function update() { $('#year-value').textContent = data.years[yearIndex]; setCanvasYear(data.years[yearIndex]); draw(); }
+function setDisplayedYear(index) { $('#year').value = index; $('#year-value').textContent = data.years[index]; setCanvasYear(data.years[index]); }
 function stopYearAnimation(commit = true) {
   const pending = yearAnimation;
   if (pending && commit) { yearIndex = pending.yearIndex; setDisplayedYear(yearIndex); }
@@ -569,11 +580,11 @@ function beginDrag(event) { if (cameraScale() <= 1) return; dragState = {x: even
 function moveDrag(event) { if (!dragState) return; cameraPan.x = dragState.panX + event.clientX - dragState.x; cameraPan.y = dragState.panY + event.clientY - dragState.y; dragState.moved ||= Math.abs(event.clientX - dragState.x) + Math.abs(event.clientY - dragState.y) > 3; constrainPan(); draw(); }
 function endDrag(event) { if (!dragState) return; const moved = dragState.moved; dragState = undefined; canvas.classList.remove('is-panning'); if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId); if (moved) { ignoreNextClick = true; selectedLink = undefined; } }
 async function toggleFullscreen() {
-  if (document.fullscreenElement === canvas) await document.exitFullscreen();
-  else await canvas.requestFullscreen({navigationUI: 'hide'});
+  if (document.fullscreenElement === canvas.parentElement) await document.exitFullscreen();
+  else await canvas.parentElement.requestFullscreen({navigationUI: 'hide'});
 }
 function syncFullscreenControl() {
-  const active = document.fullscreenElement === canvas, control = $('#fullscreen');
+  const active = document.fullscreenElement === canvas.parentElement, control = $('#fullscreen');
   control.setAttribute('aria-pressed', String(active)); control.textContent = active ? 'Exit fullscreen' : 'Fullscreen';
   draw();
 }
@@ -610,6 +621,7 @@ function setupArtistSearch() {
   input.addEventListener('blur', () => setTimeout(() => { results.hidden = true; input.setAttribute('aria-expanded', 'false'); }, 120));
 }
 init().then(() => {
+  setCanvasYear(data.years[yearIndex], false);
   // Keep the reverb handler independent of the glow channel.  This listener
   // also normalises the glow gain after the compact setup handler above.
   $('#reverb-amount').addEventListener('input', () => {

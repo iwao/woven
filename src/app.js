@@ -25,7 +25,7 @@ const PALETTES = {
 let paletteId = '5', palette = PALETTES[paletteId];
 function paletteRgbValues(value) { return Object.fromEntries(['paper', 'base', 'bright', 'accent', 'outgoing', 'incoming'].map((key) => [key, rgb(value[key])])); }
 let paletteColors = paletteRgbValues(palette);
-let data, selected = 'all', yearIndex = 0, lodIndex = 1, cameraZoom = 1, cameraPan = {x: 0, y: 0}, dragState, ignoreNextClick = false, sound = false, glowVolume = .5, highlightVolume = .15, clackVolume = .1, bassoVolume = .3, reverbAmount = .6, audio, audioBus, reverbBus, glowBus, highlightBus, clackBus, bassoBus, glowInstrument = 'synth', weaveClackId, selectedLink;
+let data, selected = 'all', yearIndex = 0, lodIndex = 0, cameraZoom = 0, cameraPan = {x: 0, y: 0}, dragState, ignoreNextClick = false, sound = false, glowVolume = .5, highlightVolume = .15, clackVolume = .1, bassoVolume = .3, reverbAmount = .6, audio, audioBus, reverbBus, glowBus, highlightBus, clackBus, bassoBus, glowInstrument = 'synth', weaveClackId, selectedLink;
 let relationCache = {key: '', raw: [], works: new Map(), artists: new Map()};
 let tileCache = new Map(), tiles = new Map();
 const compactScaleCache = new WeakMap();
@@ -35,7 +35,7 @@ const overlayPulseCellCache = new Map();
 const overlayRenderCache = new Map();
 const bassoSampleCache = new Map();
 let yearAnimation, animationFrame;
-const LOD_KEYS = ['overview', 'cluster', 'artist'];
+const LOD_KEYS = ['overview'];
 const WIDE_OVERVIEW_KEY = 'overview-wide';
 const YEAR_DURATION_AT_1X = 1400;
 const BASSO_X_BANDS = 7;
@@ -51,7 +51,7 @@ const GLOW_REFERENCE_SIZE = {width: 1280, height: 620};
 const instrumentCatalog = new Map(), loadedInstrumentPacks = new Map();
 const waveCatalog = new Map(), weaveClackBuffers = new Map(), weaveClackPromises = new Map();
 
-function tileKey(modeIndex) { return modeIndex === 0 && document.fullscreenElement === canvas.parentElement ? WIDE_OVERVIEW_KEY : LOD_KEYS[modeIndex]; }
+function tileKey() { return document.fullscreenElement === canvas.parentElement ? WIDE_OVERVIEW_KEY : LOD_KEYS[0]; }
 function tileFor(modeIndex, layer) { return tiles.get(`${tileKey(modeIndex)}:${layer}`); }
 
 function visibleArtists() { return data.artists; }
@@ -126,19 +126,9 @@ function point(points, x, y, weight, max, selected, opacity, modeIndex = 2) {
   const color = selected ? paletteColors.bright : paletteColors.base, highlight = paletteColors.bright;
   points.push(x, y, color[0] + (highlight[0] - color[0]) * intensity, color[1] + (highlight[1] - color[1]) * intensity, color[2] + (highlight[2] - color[2]) * intensity, (selected ? 1 : alpha) * opacity, size);
 }
-function lodLayers() {
-  // Keep one stable level between transition bands, then cross-fade the
-  // adjacent semantic trees while the camera passes a threshold.
-  // LOD hand-offs occur only after continuous canvas magnification has begun.
-  // This prevents the levels from reading as two static images cross-fading.
-  if (cameraZoom < .9) return [{index: 0, opacity: 1}];
-  if (cameraZoom < 1.2) { const mix = (cameraZoom - .9) / .3; return [{index: 0, opacity: 1 - mix}, {index: 1, opacity: mix}]; }
-  if (cameraZoom < 1.75) return [{index: 1, opacity: 1}];
-  if (cameraZoom < 2.05) { const mix = (cameraZoom - 1.75) / .3; return [{index: 1, opacity: 1 - mix}, {index: 2, opacity: mix}]; }
-  return [{index: 2, opacity: 1}];
-}
-function zoomLabel() { const layers = lodLayers(); return layers.length === 1 ? LOD_LABELS[layers[0].index] : `${LOD_LABELS[layers[0].index]} → ${LOD_LABELS[layers[1].index]}`; }
-function cameraScale() { return Math.max(1, 2 ** (cameraZoom - 1)); }
+function lodLayers() { return [{index: 0, opacity: 1}]; }
+function zoomLabel() { return 'Overview'; }
+function cameraScale() { return 1; }
 function glowScale(width, height) {
   const areaRatio = width * height / (GLOW_REFERENCE_SIZE.width * GLOW_REFERENCE_SIZE.height);
   return Math.max(.78, Math.min(2.7, Math.sqrt(areaRatio)));
@@ -560,22 +550,8 @@ function playYears() {
   const targetIndex = Math.min(data.years.length - 1, yearIndex + 1);
   const control = $('#play-years'); control.setAttribute('aria-pressed', 'true'); control.textContent = 'Stop'; beginYearAnimation(targetIndex); animationFrame = requestAnimationFrame(animateYear);
 }
-function setCameraZoom(next, zoomControl) {
-  const bounded = Math.max(-.25, Math.min(2.75, next));
-  if (Math.abs(bounded - cameraZoom) < .001) return false;
-  cameraZoom = bounded;
-  constrainPan();
-  lodIndex = cameraZoom < 1.05 ? 0 : cameraZoom < 1.9 ? 1 : 2;
-  zoomControl.value = lodIndex;
-  $('#zoom-value').textContent = zoomLabel(); selectedLink = undefined; update(); return true;
-}
-function wheelPixels(event) { return event.deltaY * (event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? canvas.clientHeight : 1); }
-function zoomFromWheel(event, zoomControl) {
-  // Wheel, two-finger scroll, and browser pinch (Ctrl+wheel) all produce a
-  // continuous camera movement. Pinch gets a slightly higher gain.
-  event.preventDefault();
-  setCameraZoom(cameraZoom - wheelPixels(event) * (event.ctrlKey ? .006 : .003), zoomControl);
-}
+function setCameraZoom() { return false; }
+function zoomFromWheel() {}
 function beginDrag(event) { if (cameraScale() <= 1) return; dragState = {x: event.clientX, y: event.clientY, panX: cameraPan.x, panY: cameraPan.y, moved: false}; canvas.setPointerCapture(event.pointerId); canvas.classList.add('is-panning'); }
 function moveDrag(event) { if (!dragState) return; cameraPan.x = dragState.panX + event.clientX - dragState.x; cameraPan.y = dragState.panY + event.clientY - dragState.y; dragState.moved ||= Math.abs(event.clientX - dragState.x) + Math.abs(event.clientY - dragState.y) > 3; constrainPan(); draw(); }
 function endDrag(event) { if (!dragState) return; const moved = dragState.moved; dragState = undefined; canvas.classList.remove('is-panning'); if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId); if (moved) { ignoreNextClick = true; selectedLink = undefined; } }

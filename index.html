@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>WOVEN — Cultural Fabric</title>
-    <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="stylesheet" href="/src/styles.css?v=year-display-toggle-2" />
   </head>
   <body>
     <aside class="control-drawer" id="control-drawer" aria-label="WOVEN controls">
@@ -19,6 +19,7 @@
           <label class="year-control">Year <input id="year" type="range" /><output id="year-value"></output></label>
           <button id="play-years" aria-pressed="false" title="Animate annual additions">Play years</button>
           <label class="speed-control">Animation speed <input id="animation-speed" type="range" min="0.25" max="2" value="0.65" step="0.05" /><output id="animation-speed-value">0.65×</output></label>
+          <button id="canvas-year-toggle" aria-pressed="true" title="Show or hide the year inside the canvas">Year display: On</button>
           <input id="zoom" type="hidden" value="0" /><output id="zoom-value" hidden></output>
           <button id="fullscreen" aria-pressed="false" title="Show canvas only in fullscreen">Fullscreen</button>
         </section>
@@ -39,6 +40,6 @@
       <section class="fabric-wrap"><canvas id="fabric" aria-label="Artist relation temporal field"></canvas><div class="canvas-year" id="canvas-year" aria-live="polite" aria-label="Current year"><span class="canvas-year-digit"><span>0</span></span><span class="canvas-year-digit"><span>0</span></span><span class="canvas-year-digit"><span>0</span></span><span class="canvas-year-digit"><span>0</span></span></div><div class="legend"><span></span> Artist × Artist / Artist × Work crosses · brighter = greater relation weight · <i class="overlay-source"></i>outgoing / <i class="overlay-reverse"></i>incoming artist overlay</div></section>
       <footer><span id="metrics"></span><span id="scope" hidden></span><span>Sample asset · no live database connection</span></footer>
     </main>
-    <script type="module" src="/src/app.js"></script>
+  <script type="module" src="/src/app.js?v=spatial-audio-1"></script>
   </body>
 </html>

@@ -37,6 +37,7 @@ const bassoSampleCache = new Map();
 let yearAnimation, animationFrame;
 const LOD_KEYS = ['overview'];
 const WIDE_OVERVIEW_KEY = 'overview-wide';
+const DATASET_VERSION = 'artist-first-5000-20261010';
 const YEAR_DURATION_AT_1X = 1400;
 const BASSO_X_BANDS = 7;
 const ARTIST_OVERLAY_CACHE_LIMIT = 2;
@@ -265,7 +266,9 @@ function appendYearPulse(points, pulseCandidates, width, height) {
           // new relations legible over an already bright late-year fabric.
           points.push(xPosition, cellY, ...paletteColors.accent, .16 * flare, size * 3.4);
           points.push(xPosition, cellY, ...paletteColors.bright, .98 * flare, size);
-          pulseCandidates.push({key: `${index}:${layer}:${x}:${cell.y}`, weight: cell.weight, highlighted: highlightedCells?.has(`${x}:${cell.y}`)});
+          // Keep the audible point tied to its rendered location.  The X axis
+          // becomes stereo position; lower points feel closer than upper ones.
+          pulseCandidates.push({key: `${index}:${layer}:${x}:${cell.y}`, weight: cell.weight, highlighted: highlightedCells?.has(`${x}:${cell.y}`), spatial: {pan: Math.max(-.92, Math.min(.92, xPosition / Math.max(1, width) * 2 - 1)), depth: Math.max(0, Math.min(1, 1 - cellY / Math.max(1, height)))}});
         }
       }
     }
@@ -334,6 +337,22 @@ function soundChannel(context, channel) {
   const bus = context.createGain(); bus.gain.value = channel === 'glow' ? glowVolume : channel === 'highlight' ? highlightVolume : channel === 'clack' ? clackVolume : bassoVolume; bus.connect(audioBus);
   if (channel === 'glow') glowBus = bus; else if (channel === 'highlight') highlightBus = bus; else if (channel === 'clack') clackBus = bus; else bassoBus = bus;
   return bus;
+}
+function spatialDestination(context, channel, spatial) {
+  const position = spatial || {}, depth = Math.max(0, Math.min(1, Number.isFinite(position.depth) ? position.depth : .62)), pan = Math.max(-.92, Math.min(.92, Number.isFinite(position.pan) ? position.pan : 0));
+  // A point towards the bottom is treated as nearer: it stays brighter and
+  // more direct.  Higher points recede gently into the shared dark reverb.
+  const distance = context.createGain(), filter = context.createBiquadFilter(), panner = context.createStereoPanner?.() || context.createPanner?.();
+  distance.gain.value = .72 + depth * .28;
+  filter.type = 'lowpass'; filter.frequency.value = 1700 + depth * 7600; filter.Q.value = .28;
+  distance.connect(filter);
+  if (panner) {
+    if ('pan' in panner) panner.pan.value = pan;
+    else { panner.panningModel = 'equalpower'; panner.distanceModel = 'inverse'; panner.refDistance = 1; panner.rolloffFactor = 0; panner.setPosition(pan, 0, 1); }
+    filter.connect(panner).connect(soundChannel(context, channel));
+  }
+  else filter.connect(soundChannel(context, channel));
+  return distance;
 }
 function setChannelVolume(channel, value) {
   const output = channel === 'glow' ? '#glow-volume-value' : channel === 'highlight' ? '#highlight-volume-value' : channel === 'clack' ? '#clack-volume-value' : '#basso-volume-value', bus = channel === 'glow' ? glowBus : channel === 'highlight' ? highlightBus : channel === 'clack' ? clackBus : bassoBus;
@@ -414,7 +433,7 @@ function vectorPitch(weight) {
   const intervals = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21];
   return {amount, frequency: 196 * 2 ** (intervals[Math.round(amount * (intervals.length - 1))] / 12)};
 }
-function synthTone(weight) {
+function synthTone(weight, spatial) {
   const context = soundContext(); if (!context) return;
   // Logarithmic weighting keeps an exceptional relation from jumping too far
   // above the rest, then quantises the result into a warm pentatonic scale.
@@ -423,9 +442,9 @@ function synthTone(weight) {
   oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(frequency, now);
   filter.type = 'lowpass'; filter.frequency.setValueAtTime(1800 + amount * 2200, now); filter.Q.value = 1.8;
   envelope(gain, now, .012 + amount * .018, .008, .13 + amount * .09);
-  oscillator.connect(filter).connect(gain).connect(soundChannel(context, 'glow')); oscillator.start(now); oscillator.stop(now + .28);
+  oscillator.connect(filter).connect(gain).connect(spatialDestination(context, 'glow', spatial)); oscillator.start(now); oscillator.stop(now + .28);
 }
-function pianoTone(weight) {
+function pianoTone(weight, spatial) {
   const context = soundContext(); if (!context) return;
   const {amount, frequency} = vectorPitch(weight), now = context.currentTime;
   // A compact piano-like additive voice: tuned partials with independent,
@@ -434,26 +453,26 @@ function pianoTone(weight) {
     const oscillator = context.createOscillator(), gain = context.createGain();
     oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(frequency * ratio, now); oscillator.detune.value = ratio === 1 ? 0 : (ratio - 1) * 1.6;
     envelope(gain, now, (.009 + amount * .02) * level, .002, decay + amount * .12);
-    oscillator.connect(gain).connect(soundChannel(context, 'glow')); oscillator.start(now); oscillator.stop(now + decay + amount * .12 + .03);
+    oscillator.connect(gain).connect(spatialDestination(context, 'glow', spatial)); oscillator.start(now); oscillator.stop(now + decay + amount * .12 + .03);
   }
 }
-function sampleTone(id, weight) {
+function sampleTone(id, weight, spatial) {
   const context = soundContext(); if (!context) return;
   const pack = loadedInstrumentPacks.get(id);
-  if (!pack || !pack.samples) { loadInstrumentPack(id, context).catch((error) => console.warn('Unable to load glow instrument', error)); synthTone(weight); return; }
+  if (!pack || !pack.samples) { loadInstrumentPack(id, context).catch((error) => console.warn('Unable to load glow instrument', error)); synthTone(weight, spatial); return; }
   const {amount, frequency} = vectorPitch(weight), requestedNote = 69 + 12 * Math.log2(frequency / 440);
   const sample = pack.samples.reduce((nearest, candidate) => Math.abs(candidate.note - requestedNote) < Math.abs(nearest.note - requestedNote) ? candidate : nearest);
   const source = context.createBufferSource(), gain = context.createGain(), now = context.currentTime;
   source.buffer = sample.buffer; source.playbackRate.value = 2 ** ((requestedNote - sample.note) / 12);
   envelope(gain, now, .09 + amount * .08, .003, .48 + amount * .24);
-  source.connect(gain).connect(soundChannel(context, 'glow')); source.start(now); source.stop(now + 1.1);
+  source.connect(gain).connect(spatialDestination(context, 'glow', spatial)); source.start(now); source.stop(now + 1.1);
 }
-function vectorTone(weight) {
-  if (glowInstrument === 'synth') synthTone(weight);
-  else if (glowInstrument === 'piano-synth') pianoTone(weight);
-  else sampleTone(glowInstrument, weight);
+function vectorTone(weight, spatial) {
+  if (glowInstrument === 'synth') synthTone(weight, spatial);
+  else if (glowInstrument === 'piano-synth') pianoTone(weight, spatial);
+  else sampleTone(glowInstrument, weight, spatial);
 }
-function highlightTone(weight) {
+function highlightTone(weight, spatial) {
   const context = soundContext(); if (!context) return;
   const {amount, frequency} = vectorPitch(weight), now = context.currentTime, root = Math.max(880, Math.min(2640, frequency * 4));
   // High, inharmonic partials make the overlay read as a small glint above
@@ -462,7 +481,7 @@ function highlightTone(weight) {
     const oscillator = context.createOscillator(), gain = context.createGain(), filter = context.createBiquadFilter();
     oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(root * ratio, now); filter.type = 'highpass'; filter.frequency.value = 720;
     envelope(gain, now, level + amount * level * .75, .003, decay + amount * .12);
-    oscillator.connect(filter).connect(gain).connect(soundChannel(context, 'highlight')); oscillator.start(now); oscillator.stop(now + decay + amount * .12 + .03);
+    oscillator.connect(filter).connect(gain).connect(spatialDestination(context, 'highlight', spatial)); oscillator.start(now); oscillator.stop(now + decay + amount * .12 + .03);
   }
 }
 function bassoTone(sample, duration) {
@@ -501,9 +520,10 @@ function playPulseCandidates(candidates) {
   const now = performance.now();
   if (now - yearAnimation.lastToneAt < 86) return;
   yearAnimation.lastToneAt = now;
-  vectorTone(fresh.reduce((largest, candidate) => candidate.weight > largest.weight ? candidate : largest).weight);
+  const strongest = fresh.reduce((largest, candidate) => candidate.weight > largest.weight ? candidate : largest);
+  vectorTone(strongest.weight, strongest.spatial);
   const highlights = fresh.filter((candidate) => candidate.highlighted);
-  if (highlights.length) highlightTone(highlights.reduce((largest, candidate) => candidate.weight > largest.weight ? candidate : largest).weight);
+  if (highlights.length) { const brightest = highlights.reduce((largest, candidate) => candidate.weight > largest.weight ? candidate : largest); highlightTone(brightest.weight, brightest.spatial); }
 }
 function setCanvasYear(year, animate = true) {
   const digits = String(year).padStart(4, '0').slice(-4), display = $('#canvas-year');
@@ -516,6 +536,15 @@ function setCanvasYear(year, animate = true) {
     digit.classList.remove('is-rolling'); void digit.offsetWidth; digit.classList.add('is-rolling');
   });
 }
+function setCanvasYearVisibility(visible) {
+  const display = $('#canvas-year'), control = $('#canvas-year-toggle');
+  display.hidden = !visible;
+  display.classList.toggle('is-hidden', !visible);
+  display.setAttribute('aria-hidden', String(!visible));
+  control.setAttribute('aria-pressed', String(visible));
+  control.textContent = visible ? 'Year display: On' : 'Year display: Off';
+}
+function toggleCanvasYearVisibility() { setCanvasYearVisibility($('#canvas-year').hidden); }
 function update() { $('#year-value').textContent = data.years[yearIndex]; setCanvasYear(data.years[yearIndex]); draw(); }
 function setDisplayedYear(index) { $('#year').value = index; $('#year-value').textContent = data.years[index]; setCanvasYear(data.years[index]); }
 function stopYearAnimation(commit = true) {
@@ -574,13 +603,13 @@ function setPalette(id) {
   draw();
 }
 async function loadTiles() {
-  const base = '/public/data/woven-tiles', manifest = await fetch(`${base}/manifest.json`).then((response) => response.json());
+  const base = '/public/data/woven-tiles', manifest = await fetch(`${base}/manifest.json?v=${DATASET_VERSION}`).then((response) => response.json());
   await Promise.all([...LOD_KEYS, WIDE_OVERVIEW_KEY].flatMap((lod) => ['artist', 'work'].map(async (layer) => {
-    const info = manifest.layers[`${lod}/${layer}`], text = await fetch(`${base}/${info.artifact}`).then((response) => response.text());
+    const info = manifest.layers[`${lod}/${layer}`], text = await fetch(`${base}/${info.artifact}?v=${DATASET_VERSION}`).then((response) => response.text());
     tiles.set(`${lod}:${layer}`, {...info, cells: text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))});
   })));
 }
-async function init() { data = await fetch('/public/data/woven-sample.json').then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'), paletteControl = $('#palette'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; clearOverlayCaches(); selectedLink = undefined; update(); }); paletteControl.addEventListener('change', () => setPalette(paletteControl.value)); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); setPalette(paletteControl.value); }
+async function init() { data = await fetch(`/public/data/woven-sample.json?v=${DATASET_VERSION}`).then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'), paletteControl = $('#palette'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); setCanvasYearVisibility(true); $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; clearOverlayCaches(); selectedLink = undefined; update(); }); paletteControl.addEventListener('change', () => setPalette(paletteControl.value)); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); $('#canvas-year-toggle').addEventListener('click', toggleCanvasYearVisibility); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); setPalette(paletteControl.value); }
 function setupArtistSearch() {
   const input = $('#artist-search'), results = $('#artist-results'), select = $('#artist'), normalise = (value) => value.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase();
   const choose = (artist) => { input.value = artist.name; select.value = artist.id; select.dispatchEvent(new Event('change')); results.hidden = true; input.setAttribute('aria-expanded', 'false'); };

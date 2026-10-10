@@ -4,6 +4,23 @@ Interactive visual and sonic client for WOVEN. It consumes versioned, prepared a
 
 The app must not depend directly on the ClassiiDB PostgreSQL database or large source JSONL files.
 
+## Artist artwork routes
+
+`scripts/build_artwork_catalog.py` creates a bounded public catalogue from the
+highest cumulative Artist relation weights. It exposes routes in the form
+`/artists/<classii-id>/<slug>/<year>`. The immutable Classii entity ID resolves
+the artwork; the slug is a readable alias and is canonicalised by the app.
+
+```sh
+python3 scripts/build_artwork_catalog.py --limit 100
+```
+
+`public/_redirects` is the static-host rewrite rule for `/artists/*` so a direct
+visit is served by the application rather than a filesystem 404.
+
+For a local server without route rewrites, the equivalent artwork view can be
+opened with `/?artist=<classii-id>&slug=<slug>&year=<year>`.
+
 ## Sample prototype
 
 Build the compact browser asset and sparse LOD pixel tiles after generating the

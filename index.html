@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>WOVEN — Cultural Fabric</title>
-    <link rel="stylesheet" href="/src/styles.css?v=year-display-toggle-2" />
+    <link rel="stylesheet" href="/src/styles.css?v=canvas-player-featured-artists-1" />
   </head>
   <body>
     <aside class="control-drawer" id="control-drawer" aria-label="WOVEN controls">
@@ -16,16 +16,12 @@
           <label>Color palette <select id="palette"><option value="1">No.1 — Jet black</option><option value="2">No.2 — Wisteria</option><option value="3">No.3 — Tangerine</option><option value="4">No.4 — Prussian blue</option><option value="5" selected>No.5 — Honey bronze</option></select></label>
           <label class="artist-overlay-control">Artist overlay <input class="artist-search" id="artist-search" type="search" placeholder="Type an artist name…" autocomplete="off" aria-autocomplete="list" aria-controls="artist-results" aria-expanded="false" /><div class="artist-results" id="artist-results" role="listbox" hidden></div></label>
           <select id="artist" hidden aria-hidden="true"><option value="all">No overlay</option></select>
-          <label class="year-control">Year <input id="year" type="range" /><output id="year-value"></output></label>
-          <button id="play-years" aria-pressed="false" title="Animate annual additions">Play years</button>
           <label class="speed-control">Animation speed <input id="animation-speed" type="range" min="0.25" max="2" value="0.65" step="0.05" /><output id="animation-speed-value">0.65×</output></label>
           <button id="canvas-year-toggle" aria-pressed="true" title="Show or hide the year inside the canvas">Year display: On</button>
           <input id="zoom" type="hidden" value="0" /><output id="zoom-value" hidden></output>
-          <button id="fullscreen" aria-pressed="false" title="Show canvas only in fullscreen">Fullscreen</button>
         </section>
         <section class="control-group sound-group" aria-labelledby="sound-controls-title">
           <h2 id="sound-controls-title">Sound</h2>
-          <button id="sound" aria-pressed="false">Sound off</button>
           <label class="instrument-control">Glow sound <select id="glow-instrument"><option value="synth">Synth</option><option value="piano-synth">Piano (synth)</option></select></label>
           <label class="volume-control">Glow volume <input id="glow-volume" type="range" min="0" max="1" value="0.5" step="0.01" /><output id="glow-volume-value">50%</output></label>
           <label class="volume-control">Highlight volume <input id="highlight-volume" type="range" min="0" max="1" value="0.15" step="0.01" /><output id="highlight-volume-value">15%</output></label>
@@ -37,9 +33,15 @@
       </div>
     </aside>
     <main>
-      <section class="fabric-wrap"><canvas id="fabric" aria-label="Artist relation temporal field"></canvas><div class="canvas-year" id="canvas-year" aria-live="polite" aria-label="Current year"><span class="canvas-year-digit"><span>0</span></span><span class="canvas-year-digit"><span>0</span></span><span class="canvas-year-digit"><span>0</span></span><span class="canvas-year-digit"><span>0</span></span></div><div class="legend"><span></span> Artist × Artist / Artist × Work crosses · brighter = greater relation weight · <i class="overlay-source"></i>outgoing / <i class="overlay-reverse"></i>incoming artist overlay</div></section>
-      <footer><span id="metrics"></span><span id="scope" hidden></span><span>Sample asset · no live database connection</span></footer>
+      <header class="artwork-plate" id="artwork-plate" hidden>
+        <a class="artwork-back" href="/" aria-label="Return to WOVEN">WOVEN</a>
+        <p class="artwork-kicker">ARTIST STUDY</p>
+        <h1 id="artwork-artist-name"></h1>
+        <p id="artwork-year"></p>
+      </header>
+      <section class="fabric-wrap"><canvas id="fabric" aria-label="Artist relation temporal field"></canvas><div class="canvas-player" aria-label="Playback controls"><select class="featured-artist" id="featured-artist" aria-label="Artists · 100 limited"><option value="all">Artists · 100 limited</option></select><label class="year-control">Year <input id="year" type="range" /><output id="year-value"></output></label><button class="player-icon" id="play-years" aria-pressed="false" aria-label="Play years" title="Play years"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="play-mark" d="M8 5.5v13l10-6.5z"/><path class="stop-mark" d="M7 7h10v10H7z"/></svg></button><button class="player-icon" id="sound" aria-pressed="false" aria-label="Sound off" title="Sound off"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h4l5 4v-13l-5 4z"/><path class="sound-wave" d="M16 9c1 .8 1.5 1.8 1.5 3S17 14.2 16 15M18.6 6.6C20.2 8.1 21 10 21 12s-.8 3.9-2.4 5.4"/></svg></button><button class="player-icon" id="fullscreen" aria-pressed="false" aria-label="Enter fullscreen" title="Enter fullscreen"><svg class="fullscreen-icon" viewBox="0 0 24 24" aria-hidden="true"><path class="expand-mark" d="M9 4H4v5M4 4l6 6M15 4h5v5M20 4l-6 6M9 20H4v-5M4 20l6-6M15 20h5v-5M20 20l-6-6"/><path class="shrink-mark" d="M9 4v5H4M4 4l6 6M15 4v5h5M20 4l-6 6M9 20v-5H4M4 20l6-6M15 20v-5h5M20 20l-6-6"/></svg></button></div><div class="canvas-year" id="canvas-year" aria-live="polite" aria-label="Current year"><span class="canvas-year-digit"><span>0</span></span><span class="canvas-year-digit"><span>0</span></span><span class="canvas-year-digit"><span>0</span></span><span class="canvas-year-digit"><span>0</span></span></div></section>
+      <footer class="site-footer"><a href="/about/">About</a><span>©Iwao KOBAYASHI Classii, 2026</span><span id="metrics"></span><span id="scope" hidden></span></footer>
     </main>
-  <script type="module" src="/src/app.js?v=keyboard-playback-1"></script>
+  <script type="module" src="/src/app.js?v=canvas-featured-artists-5"></script>
   </body>
 </html>

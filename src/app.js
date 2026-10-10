@@ -37,7 +37,7 @@ const bassoSampleCache = new Map();
 let yearAnimation, animationFrame;
 const LOD_KEYS = ['overview'];
 const WIDE_OVERVIEW_KEY = 'overview-wide';
-const DATASET_VERSION = 'artist-first-5000-20261010';
+const DATASET_VERSION = 'artist-first-5000-20261010-prebirth-guard-1';
 const YEAR_DURATION_AT_1X = 1400;
 const BASSO_X_BANDS = 7;
 const ARTIST_OVERLAY_CACHE_LIMIT = 2;
@@ -51,6 +51,19 @@ const DEFAULT_WEAVE_CLACK = '489000__phonosupf__wood-bell.wav';
 const GLOW_REFERENCE_SIZE = {width: 1280, height: 620};
 const instrumentCatalog = new Map(), loadedInstrumentPacks = new Map();
 const waveCatalog = new Map(), weaveClackBuffers = new Map(), weaveClackPromises = new Map();
+const ARTWORK_CATALOG_URL = '/public/data/artworks/catalog.json?v=artist-birth-years-2';
+
+function artworkRoute() {
+  const parts = location.pathname.split('/').filter(Boolean);
+  if (parts.length === 4 && parts[0] === 'artists') {
+    const [_, classiiId, slug, year] = parts;
+    if (/^[0-9]+$/.test(year)) return {classiiId: decodeURIComponent(classiiId), slug: decodeURIComponent(slug), year: Number(year), source: 'path'};
+  }
+  const query = new URLSearchParams(location.search), classiiId = query.get('artist'), year = query.get('year');
+  if (classiiId && year && /^[0-9]+$/.test(year)) return {classiiId, slug: query.get('slug') || '', year: Number(year), source: 'query'};
+  return undefined;
+}
+const requestedArtwork = artworkRoute();
 
 function tileKey() { return document.fullscreenElement === canvas.parentElement ? WIDE_OVERVIEW_KEY : LOD_KEYS[0]; }
 function tileFor(modeIndex, layer) { return tiles.get(`${tileKey(modeIndex)}:${layer}`); }
@@ -545,13 +558,22 @@ function setCanvasYearVisibility(visible) {
   control.textContent = visible ? 'Year display: On' : 'Year display: Off';
 }
 function toggleCanvasYearVisibility() { setCanvasYearVisibility($('#canvas-year').hidden); }
+function setPlaybackControl(playing) {
+  const control = $('#play-years'), label = playing ? 'Stop' : 'Play years';
+  control.setAttribute('aria-pressed', String(playing)); control.setAttribute('aria-label', label); control.title = label;
+}
+function setSoundControl(enabled) {
+  const control = $('#sound'), label = enabled ? 'Sound on' : 'Sound off';
+  if (!control.querySelector('svg')) control.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h4l5 4v-13l-5 4z"/><path class="sound-wave" d="M16 9c1 .8 1.5 1.8 1.5 3S17 14.2 16 15M18.6 6.6C20.2 8.1 21 10 21 12s-.8 3.9-2.4 5.4"/></svg>';
+  control.setAttribute('aria-pressed', String(enabled)); control.setAttribute('aria-label', label); control.title = label;
+}
 function update() { $('#year-value').textContent = data.years[yearIndex]; setCanvasYear(data.years[yearIndex]); draw(); }
 function setDisplayedYear(index) { $('#year').value = index; $('#year-value').textContent = data.years[index]; setCanvasYear(data.years[index]); }
 function stopYearAnimation(commit = true) {
   const pending = yearAnimation;
   if (pending && commit) { yearIndex = pending.yearIndex; setDisplayedYear(yearIndex); }
   yearAnimation = undefined; if (animationFrame) cancelAnimationFrame(animationFrame); animationFrame = undefined;
-  const control = $('#play-years'); control.setAttribute('aria-pressed', 'false'); control.textContent = 'Play years';
+  setPlaybackControl(false);
   if (pending && commit) draw();
 }
 function animationDuration() { return YEAR_DURATION_AT_1X / Number($('#animation-speed').value); }
@@ -577,7 +599,7 @@ function playYears() {
   if (yearAnimation) { stopYearAnimation(); return; }
   if (yearIndex >= data.years.length - 1) yearIndex = -1;
   const targetIndex = Math.min(data.years.length - 1, yearIndex + 1);
-  const control = $('#play-years'); control.setAttribute('aria-pressed', 'true'); control.textContent = 'Stop'; beginYearAnimation(targetIndex); animationFrame = requestAnimationFrame(animateYear);
+  setPlaybackControl(true); beginYearAnimation(targetIndex); animationFrame = requestAnimationFrame(animateYear);
 }
 function playbackShortcut(event) {
   if (event.code !== 'Space' || event.repeat) return;
@@ -596,9 +618,12 @@ async function toggleFullscreen() {
   else await canvas.parentElement.requestFullscreen({navigationUI: 'hide'});
 }
 function syncFullscreenControl() {
-  const active = document.fullscreenElement === canvas.parentElement, control = $('#fullscreen');
-  control.setAttribute('aria-pressed', String(active)); control.textContent = active ? 'Exit fullscreen' : 'Fullscreen';
+  setFullscreenControl(document.fullscreenElement === canvas.parentElement);
   draw();
+}
+function setFullscreenControl(active) {
+  const control = $('#fullscreen'), label = active ? 'Exit fullscreen' : 'Enter fullscreen';
+  control.setAttribute('aria-pressed', String(active)); control.setAttribute('aria-label', label); control.title = label;
 }
 function toggleControlDrawer() {
   const drawer = $('#control-drawer'), control = $('#drawer-toggle'), open = !drawer.classList.contains('is-open');
@@ -616,6 +641,43 @@ async function loadTiles() {
     tiles.set(`${lod}:${layer}`, {...info, cells: text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))});
   })));
 }
+async function configureArtworkRoute() {
+  if (!requestedArtwork) return;
+  const response = await fetch(ARTWORK_CATALOG_URL);
+  if (!response.ok) throw new Error('Unable to load the WOVEN artwork catalogue.');
+  const catalogue = await response.json(), entry = catalogue.artists.find((artist) => artist.classiiId === requestedArtwork.classiiId);
+  if (!entry) throw new Error('This Artist is not in the public WOVEN artwork collection.');
+  const artist = data._artistsById.get(entry.classiiId);
+  if (!artist) throw new Error('The requested Artist is unavailable in this dataset.');
+  const nearestYear = data.years.reduce((best, candidate) => Math.abs(candidate - requestedArtwork.year) < Math.abs(best - requestedArtwork.year) ? candidate : best, data.years[0]);
+  selected = artist.id; $('#artist').value = artist.id; yearIndex = data.years.indexOf(nearestYear); $('#year').value = yearIndex;
+  clearOverlayCaches(); document.body.classList.add('artwork-mode');
+  const displayName = entry.displayName || artist.name;
+  $('#artwork-plate').hidden = false; $('#artwork-artist-name').textContent = displayName; $('#artwork-year').textContent = String(nearestYear);
+  document.title = `${displayName} · ${nearestYear} — WOVEN`;
+  if (requestedArtwork.source === 'path') {
+    const canonical = `/artists/${encodeURIComponent(entry.classiiId)}/${encodeURIComponent(entry.slug)}/${nearestYear}`;
+    if (location.pathname !== canonical) history.replaceState({}, '', canonical);
+  } else {
+    const canonical = `/?artist=${encodeURIComponent(entry.classiiId)}&slug=${encodeURIComponent(entry.slug)}&year=${nearestYear}`;
+    if (`${location.pathname}${location.search}` !== canonical) history.replaceState({}, '', canonical);
+  }
+  update();
+}
+async function setupFeaturedArtistSelector() {
+  if (requestedArtwork) return;
+  const control = $('#featured-artist'), select = $('#artist');
+  try {
+    const response = await fetch(ARTWORK_CATALOG_URL);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const catalogue = await response.json();
+    control.replaceChildren(new Option('Artists · 100 limited', 'all'), ...catalogue.artists.map((artist) => new Option(`${artist.displayName || artist.name} · ${artist.birthYear}`, artist.classiiId)));
+  } catch (error) {
+    console.warn('Unable to load featured Artists', error); return;
+  }
+  control.addEventListener('change', () => { select.value = control.value; select.dispatchEvent(new Event('change')); });
+  select.addEventListener('change', () => { control.value = [...control.options].some((option) => option.value === select.value) ? select.value : 'all'; });
+}
 async function init() { data = await fetch(`/public/data/woven-sample.json?v=${DATASET_VERSION}`).then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'), paletteControl = $('#palette'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); setCanvasYearVisibility(true); $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; clearOverlayCaches(); selectedLink = undefined; update(); }); paletteControl.addEventListener('change', () => setPalette(paletteControl.value)); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); $('#canvas-year-toggle').addEventListener('click', toggleCanvasYearVisibility); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); document.addEventListener('keydown', playbackShortcut); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); setPalette(paletteControl.value); }
 function setupArtistSearch() {
   const input = $('#artist-search'), results = $('#artist-results'), select = $('#artist'), normalise = (value) => value.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase();
@@ -632,7 +694,9 @@ function setupArtistSearch() {
   input.addEventListener('keydown', (event) => { if (event.key === 'Escape') { results.hidden = true; input.setAttribute('aria-expanded', 'false'); } if (event.key === 'Enter') { const exact = data.artists.find((artist) => normalise(artist.name) === normalise(input.value)); if (exact) { event.preventDefault(); choose(exact); } } });
   input.addEventListener('blur', () => setTimeout(() => { results.hidden = true; input.setAttribute('aria-expanded', 'false'); }, 120));
 }
-init().then(() => {
+init().then(async () => {
+  await configureArtworkRoute();
+  await setupFeaturedArtistSelector();
   setCanvasYear(data.years[yearIndex], false);
   // Keep the reverb handler independent of the glow channel.  This listener
   // also normalises the glow gain after the compact setup handler above.
@@ -640,6 +704,11 @@ init().then(() => {
     setChannelVolume('glow', Number($('#glow-volume').value));
     setReverbAmount(Number($('#reverb-amount').value));
   });
+  setSoundControl(sound);
+  // The compact setup listener initialises the audio graph. Restore the SVG
+  // icon afterwards because its legacy text label is intentionally retained
+  // for non-visual controls elsewhere in the app.
+  $('#sound').addEventListener('click', () => queueMicrotask(() => setSoundControl(sound)));
   setupArtistSearch();
   for (const [channel, id] of [['basso', '#basso-volume'], ['highlight', '#highlight-volume']]) {
     const control = $(id); setChannelVolume(channel, Number(control.value));

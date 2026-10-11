@@ -1,2 +1,0 @@
-public/data/woven-sample.json filter=lfs diff=lfs merge=lfs -text
-public/data/woven-tiles/*.jsonl filter=lfs diff=lfs merge=lfs -text

@@ -14,7 +14,13 @@
         <p class="drawer-kicker">WOVEN CONTROLS</p>
         <section class="control-group" aria-labelledby="view-controls-title">
           <h2 id="view-controls-title">View</h2>
-          <label>Color palette <select id="palette"><option value="1">No.1 — Jet black</option><option value="2">No.2 — Wisteria</option><option value="3">No.3 — Tangerine</option><option value="4">No.4 — Prussian blue</option><option value="5" selected>No.5 — Honey bronze</option></select></label>
+          <label>Color palette <select id="palette"><option value="1">No.1 — Jet black</option><option value="2">No.2 — Wisteria</option><option value="3">No.3 — Tangerine</option><option value="4">No.4 — Prussian blue</option><option value="5" selected>Default — WOVEN</option><option value="custom">Custom</option></select></label>
+          <div class="palette-editors" aria-label="Custom canvas colors">
+            <label>Background <span class="color-field"><input id="color-background" type="color" value="#000000" /><output></output></span></label>
+            <label>Vector <span class="color-field"><input id="color-vector" type="color" value="#e2d5c5" /><output></output></span></label>
+            <label>Highlight <span class="color-field"><input id="color-highlight" type="color" value="#6a8895" /><output></output></span></label>
+            <label>Glow <span class="color-field"><input id="color-glow" type="color" value="#f99848" /><output></output></span></label>
+          </div>
           <label class="artist-overlay-control">Artist overlay <input class="artist-search" id="artist-search" type="search" placeholder="Type an artist name…" autocomplete="off" aria-autocomplete="list" aria-controls="artist-results" aria-expanded="false" /><div class="artist-results" id="artist-results" role="listbox" hidden></div></label>
           <select id="artist" hidden aria-hidden="true"><option value="all">No overlay</option></select>
           <label class="speed-control">Animation speed <input id="animation-speed" type="range" min="0.25" max="2" value="0.65" step="0.05" /><output id="animation-speed-value">0.65×</output></label>

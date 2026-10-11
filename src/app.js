@@ -2,16 +2,16 @@ const $ = (s) => document.querySelector(s);
 const canvas = $('#fabric'), gl = canvas.getContext('webgl2', {antialias: false, alpha: false});
 if (!gl) throw new Error('WOVEN requires WebGL2.');
 const VERTEX_SHADER = `#version 300 es
-in vec2 a_position; in vec4 a_color; in float a_size;
+in vec2 a_position; in vec4 a_color; in float a_size; in float a_softness;
 uniform vec2 u_resolution; uniform vec2 u_center; uniform vec2 u_pan; uniform float u_scale; uniform float u_pixel_ratio;
-out vec4 v_color;
-void main() { vec2 scene = (a_position - u_center + u_pan) * u_scale + u_center; vec2 clip = vec2(scene.x / u_resolution.x * 2.0 - 1.0, 1.0 - scene.y / u_resolution.y * 2.0); gl_Position = vec4(clip, 0.0, 1.0); gl_PointSize = a_size * u_pixel_ratio; v_color = a_color; }`;
+out vec4 v_color; out float v_softness;
+void main() { vec2 scene = (a_position - u_center + u_pan) * u_scale + u_center; vec2 clip = vec2(scene.x / u_resolution.x * 2.0 - 1.0, 1.0 - scene.y / u_resolution.y * 2.0); gl_Position = vec4(clip, 0.0, 1.0); gl_PointSize = a_size * u_pixel_ratio; v_color = a_color; v_softness = a_softness; }`;
 const FRAGMENT_SHADER = `#version 300 es
-precision mediump float; in vec4 v_color; out vec4 out_color;
-void main() { if (distance(gl_PointCoord, vec2(.5)) > .5) discard; out_color = v_color; }`;
+precision mediump float; in vec4 v_color; in float v_softness; out vec4 out_color;
+void main() { float radius = distance(gl_PointCoord, vec2(.5)); if (radius > .5) discard; float feather = 1.0 - smoothstep(.12, .5, radius); out_color = vec4(v_color.rgb, v_color.a * mix(1.0, feather, v_softness)); }`;
 function shader(type, source) { const value = gl.createShader(type); gl.shaderSource(value, source); gl.compileShader(value); if (!gl.getShaderParameter(value, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(value)); return value; }
 const program = gl.createProgram(); gl.attachShader(program, shader(gl.VERTEX_SHADER, VERTEX_SHADER)); gl.attachShader(program, shader(gl.FRAGMENT_SHADER, FRAGMENT_SHADER)); gl.linkProgram(program); if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
-const pointBuffer = gl.createBuffer(), positionLoc = gl.getAttribLocation(program, 'a_position'), colorLoc = gl.getAttribLocation(program, 'a_color'), sizeLoc = gl.getAttribLocation(program, 'a_size');
+const pointBuffer = gl.createBuffer(), positionLoc = gl.getAttribLocation(program, 'a_position'), colorLoc = gl.getAttribLocation(program, 'a_color'), sizeLoc = gl.getAttribLocation(program, 'a_size'), softnessLoc = gl.getAttribLocation(program, 'a_softness');
 const uniforms = Object.fromEntries(['u_resolution', 'u_center', 'u_pan', 'u_scale', 'u_pixel_ratio'].map((name) => [name, gl.getUniformLocation(program, name)]));
 const LOD_LABELS = ['Overview', 'Cluster', 'Artist'];
 const rgb = (hex) => hex.match(/\w\w/g).slice(0, 3).map((value) => parseInt(value, 16) / 255);
@@ -20,11 +20,34 @@ const PALETTES = {
   '2': {name: 'No.2 — Wisteria', paper: '#050505', base: '#53687e', bright: '#f5e9e2', accent: '#98a6d4', outgoing: '#f5e9e2', incoming: '#7871aa'},
   '3': {name: 'No.3 — Tangerine', paper: '#050505', base: '#4ce0b3', bright: '#ffaf87', accent: '#ff8e72', outgoing: '#ed6a5e', incoming: '#ffaf87'},
   '4': {name: 'No.4 — Prussian blue', paper: '#050505', base: '#0353a4', bright: '#b9d6f2', accent: '#006daa', outgoing: '#b9d6f2', incoming: '#003559'},
-  '5': {name: 'No.5 — Honey bronze', paper: '#050505', base: '#eec170', bright: '#f2a65a', accent: '#f58549', outgoing: '#f58549', incoming: '#772f1a'},
+  '5': {name: 'Default — WOVEN', paper: '#000000', base: '#e2d5c5', bright: '#f99848', accent: '#f99848', outgoing: '#6a8895', incoming: '#6a8895'},
 };
 let paletteId = '5', palette = PALETTES[paletteId];
 function paletteRgbValues(value) { return Object.fromEntries(['paper', 'base', 'bright', 'accent', 'outgoing', 'incoming'].map((key) => [key, rgb(value[key])])); }
 let paletteColors = paletteRgbValues(palette);
+const PALETTE_EDITOR_ROLES = {
+  background: {keys: ['paper'], source: 'paper'},
+  vector: {keys: ['base'], source: 'base'},
+  highlight: {keys: ['outgoing', 'incoming'], source: 'outgoing'},
+  glow: {keys: ['bright', 'accent'], source: 'bright'},
+};
+function syncPaletteEditors() {
+  Object.entries(PALETTE_EDITOR_ROLES).forEach(([role, {source}]) => {
+    const control = $(`#color-${role}`);
+    if (!control) return;
+    control.value = palette[source];
+    control.nextElementSibling.textContent = palette[source].toUpperCase();
+  });
+}
+function setPaletteEditorColor(role, value) {
+  const editor = PALETTE_EDITOR_ROLES[role];
+  if (!editor || !/^#[0-9a-f]{6}$/i.test(value)) return;
+  palette = {...palette}; editor.keys.forEach((key) => { palette[key] = value; });
+  paletteId = 'custom'; paletteColors = paletteRgbValues(palette);
+  $('#palette').value = paletteId;
+  const control = $(`#color-${role}`); if (control) control.nextElementSibling.textContent = value.toUpperCase();
+  draw();
+}
 let data, selected = 'all', yearIndex = 0, lodIndex = 0, cameraZoom = 0, cameraPan = {x: 0, y: 0}, dragState, ignoreNextClick = false, sound = false, glowVolume = .5, highlightVolume = .15, clackVolume = .1, bassoVolume = .3, reverbAmount = .6, audio, audioBus, reverbBus, glowBus, highlightBus, clackBus, bassoBus, glowInstrument = 'synth', weaveClackId, selectedLink;
 let artworkCatalog = new Map();
 let relationCache = {key: '', raw: [], works: new Map(), artists: new Map()};
@@ -145,7 +168,7 @@ function point(points, x, y, weight, max, selected, opacity, modeIndex = 2) {
   const size = selected ? 6.6 : overview ? Math.min(4.2, 2 + Math.sqrt(weight) * .16) : cluster ? Math.min(4.8, 1.7 + Math.sqrt(weight) * .38) : Math.min(4.2, 1.1 + Math.sqrt(weight) * .44);
   const alpha = overview ? .075 + intensity * .5 : cluster ? .055 + intensity * .6 : .035 + intensity * .55;
   const color = selected ? paletteColors.bright : paletteColors.base, highlight = paletteColors.bright;
-  points.push(x, y, color[0] + (highlight[0] - color[0]) * intensity, color[1] + (highlight[1] - color[1]) * intensity, color[2] + (highlight[2] - color[2]) * intensity, (selected ? 1 : alpha) * opacity, size);
+  points.push(x, y, color[0] + (highlight[0] - color[0]) * intensity, color[1] + (highlight[1] - color[1]) * intensity, color[2] + (highlight[2] - color[2]) * intensity, (selected ? 1 : alpha) * opacity, size, 0);
 }
 function lodLayers() { return [{index: 0, opacity: 1}]; }
 function zoomLabel() { return 'Overview'; }
@@ -175,13 +198,15 @@ function appendLodLayer(points, modeIndex, opacity, width, height, maxWeight, te
 }
 function overlayPoint(points, x, y, weight, maxWeight, opacity, modeIndex) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(maxWeight));
-  const boost = modeIndex === 0 ? 1.62 : modeIndex === 1 ? 1.27 : 1;
-  points.push(x, y, ...paletteColors.outgoing, (.64 + intensity * .34) * opacity, (3.2 + Math.sqrt(weight) * .28) * boost);
+  const boost = modeIndex === 0 ? 1.62 : modeIndex === 1 ? 1.27 : 1, size = (3.2 + Math.sqrt(weight) * .28) * boost;
+  points.push(x, y, ...paletteColors.outgoing, (.20 + intensity * .14) * opacity, size * 2.75, .94);
+  points.push(x, y, ...paletteColors.outgoing, (.58 + intensity * .30) * opacity, size, .22);
 }
 function reverseOverlayPoint(points, x, y, weight, maxWeight, opacity, modeIndex) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(maxWeight));
-  const boost = modeIndex === 0 ? 1.35 : modeIndex === 1 ? 1.16 : 1;
-  points.push(x, y, ...paletteColors.incoming, (.62 + intensity * .36) * opacity, (3.1 + Math.sqrt(weight) * .28) * boost);
+  const boost = modeIndex === 0 ? 1.35 : modeIndex === 1 ? 1.16 : 1, size = (3.1 + Math.sqrt(weight) * .28) * boost;
+  points.push(x, y, ...paletteColors.incoming, (.19 + intensity * .14) * opacity, size * 2.65, .94);
+  points.push(x, y, ...paletteColors.incoming, (.56 + intensity * .32) * opacity, size, .22);
 }
 function artistOverlayLinks(artistId, temporalIndex) {
   const key = `${artistId}:${temporalIndex}`, cached = artistOverlayCache.get(key); if (cached) return rememberBounded(artistOverlayCache, key, cached, ARTIST_OVERLAY_CACHE_LIMIT);
@@ -281,8 +306,8 @@ function appendYearPulse(points, pulseCandidates, width, height) {
           const flare = (1 - distance / .035) * opacity, size = (4 + Math.min(7, Math.sqrt(cell.weight) * .9)) * responsiveGlow;
           // Pulses are drawn in a separate additive pass: a broad halo keeps
           // new relations legible over an already bright late-year fabric.
-          points.push(xPosition, cellY, ...paletteColors.accent, .16 * flare, size * 3.4);
-          points.push(xPosition, cellY, ...paletteColors.bright, .98 * flare, size);
+          points.push(xPosition, cellY, ...paletteColors.accent, .16 * flare, size * 3.4, .92);
+          points.push(xPosition, cellY, ...paletteColors.bright, .98 * flare, size, .12);
           // Keep the audible point tied to its rendered location.  The X axis
           // becomes stereo position; lower points feel closer than upper ones.
           pulseCandidates.push({key: `${index}:${layer}:${x}:${cell.y}`, weight: cell.weight, highlighted: highlightedCells?.has(`${x}:${cell.y}`), spatial: {pan: Math.max(-.92, Math.min(.92, xPosition / Math.max(1, width) * 2 - 1)), depth: Math.max(0, Math.min(1, 1 - cellY / Math.max(1, height)))}});
@@ -292,8 +317,8 @@ function appendYearPulse(points, pulseCandidates, width, height) {
   }
 }
 function renderPoints(points, pulses, width, height, viewScale) {
-  const pixelRatio = devicePixelRatio, stride = 7 * 4, background = paletteColors.paper; canvas.width = Math.round(width * pixelRatio); canvas.height = Math.round(height * pixelRatio); gl.viewport(0, 0, canvas.width, canvas.height); gl.clearColor(...background, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.useProgram(program); gl.bindBuffer(gl.ARRAY_BUFFER, pointBuffer); gl.enableVertexAttribArray(positionLoc); gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, stride, 0); gl.enableVertexAttribArray(colorLoc); gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, stride, 2 * 4); gl.enableVertexAttribArray(sizeLoc); gl.vertexAttribPointer(sizeLoc, 1, gl.FLOAT, false, stride, 6 * 4); gl.uniform2f(uniforms.u_resolution, width, height); gl.uniform2f(uniforms.u_center, width / 2, height / 2); gl.uniform2f(uniforms.u_pan, cameraPan.x, cameraPan.y); gl.uniform1f(uniforms.u_scale, viewScale); gl.uniform1f(uniforms.u_pixel_ratio, pixelRatio); gl.enable(gl.BLEND);
-  const drawPass = (values, additive) => { if (!values.length) return; gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(values), gl.DYNAMIC_DRAW); gl.blendFunc(gl.SRC_ALPHA, additive ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA); gl.drawArrays(gl.POINTS, 0, values.length / 7); };
+  const pixelRatio = devicePixelRatio, stride = 8 * 4, background = paletteColors.paper; canvas.width = Math.round(width * pixelRatio); canvas.height = Math.round(height * pixelRatio); gl.viewport(0, 0, canvas.width, canvas.height); gl.clearColor(...background, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.useProgram(program); gl.bindBuffer(gl.ARRAY_BUFFER, pointBuffer); gl.enableVertexAttribArray(positionLoc); gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, stride, 0); gl.enableVertexAttribArray(colorLoc); gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, stride, 2 * 4); gl.enableVertexAttribArray(sizeLoc); gl.vertexAttribPointer(sizeLoc, 1, gl.FLOAT, false, stride, 6 * 4); gl.enableVertexAttribArray(softnessLoc); gl.vertexAttribPointer(softnessLoc, 1, gl.FLOAT, false, stride, 7 * 4); gl.uniform2f(uniforms.u_resolution, width, height); gl.uniform2f(uniforms.u_center, width / 2, height / 2); gl.uniform2f(uniforms.u_pan, cameraPan.x, cameraPan.y); gl.uniform1f(uniforms.u_scale, viewScale); gl.uniform1f(uniforms.u_pixel_ratio, pixelRatio); gl.enable(gl.BLEND);
+  const drawPass = (values, additive) => { if (!values.length) return; gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(values), gl.DYNAMIC_DRAW); gl.blendFunc(gl.SRC_ALPHA, additive ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA); gl.drawArrays(gl.POINTS, 0, values.length / 8); };
   drawPass(points, false); drawPass(pulses, true);
 }
 function draw() {
@@ -665,8 +690,10 @@ function toggleControlDrawer() {
   drawer.classList.toggle('is-open', open); control.setAttribute('aria-expanded', String(open));
 }
 function setPalette(id) {
-  paletteId = id; palette = PALETTES[id] || PALETTES['5'];
+  if (id === 'custom') return;
+  paletteId = id; palette = {...(PALETTES[id] || PALETTES['5'])};
   paletteColors = paletteRgbValues(palette);
+  syncPaletteEditors();
   draw();
 }
 async function loadTiles() {
@@ -750,6 +777,9 @@ function setupArtistSearch() {
 }
 init().then(async () => {
   await configureArtworkRoute();
+  Object.keys(PALETTE_EDITOR_ROLES).forEach((role) => {
+    $(`#color-${role}`).addEventListener('input', (event) => setPaletteEditorColor(role, event.target.value));
+  });
   await setupFeaturedArtistSelector();
   setCanvasYear(data.years[yearIndex], false);
   // Keep the reverb handler independent of the glow channel.  This listener

@@ -38,6 +38,8 @@ export default {
     // Static Assets redirects unknown extensionless paths to `/`. Treat that
     // redirect exactly like a miss so artist routes receive the SPA shell.
     if ((asset.status >= 200 && asset.status < 300) || url.pathname.includes('.')) return asset;
-    return env.ASSETS.fetch(new Request(new URL('/index.html', url), request));
+    // Static Assets canonicalises /index.html to /. Fetch that canonical shell
+    // internally while retaining the visitor's /artists/... URL in the browser.
+    return env.ASSETS.fetch(new Request(new URL('/', url), {method: 'GET', headers: request.headers}));
   },
 };

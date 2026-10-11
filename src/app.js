@@ -95,6 +95,19 @@ function artworkUrl(entry, year) {
   if (isLocalPreview) return `/?${new URLSearchParams({artist: entry.classiiId, slug: entry.slug, year: String(year)})}`;
   return `/artists/${encodeURIComponent(entry.classiiId)}/${encodeURIComponent(entry.slug)}/${year}`;
 }
+function updateArtworkMetadata(entry, displayName, year) {
+  const title = `WOVEN — ${displayName} · ${year}`;
+  const description = `${displayName} · ${year}, a WOVEN artist relation temporal field from the Classii cultural graph.`;
+  const route = `/artists/${encodeURIComponent(entry.classiiId)}/${encodeURIComponent(entry.slug)}/${year}`;
+  const absolute = new URL(route, location.origin).href;
+  const image = new URL(`/public/og/artworks/${encodeURIComponent(entry.classiiId)}/${year}.png`, location.origin).href;
+  const set = (selector, content) => { const node = document.querySelector(selector); if (node) node.setAttribute('content', content); };
+  document.title = title;
+  set('meta[name="description"]', description);
+  set('meta[property="og:title"]', title); set('meta[property="og:description"]', description);
+  set('meta[property="og:url"]', absolute); set('meta[property="og:image"]', image);
+  set('meta[name="twitter:title"]', title); set('meta[name="twitter:description"]', description); set('meta[name="twitter:image"]', image);
+}
 
 function tileKey() { return document.fullscreenElement === canvas.parentElement ? WIDE_OVERVIEW_KEY : LOD_KEYS[0]; }
 function tileFor(modeIndex, layer) { return tiles.get(`${tileKey(modeIndex)}:${layer}`); }
@@ -737,7 +750,7 @@ async function configureArtworkRoute() {
   selected = artist.id; $('#artist').value = artist.id; yearIndex = data.years.indexOf(nearestYear); $('#year').value = yearIndex;
   clearOverlayCaches(); document.body.classList.add('artwork-route'); setupArtworkPlayback();
   const displayName = entry.displayName || artist.name;
-  document.title = `WOVEN — ${displayName} · ${nearestYear}`;
+  updateArtworkMetadata(entry, displayName, nearestYear);
   const pageTitle = $('#global-page-title');
   pageTitle.textContent = `${displayName} · ${nearestYear}`;
   pageTitle.hidden = false;

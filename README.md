@@ -18,6 +18,23 @@ python3 scripts/build_artwork_catalog.py --limit 100
 `public/_redirects` is the static-host rewrite rule for `/artists/*` so a direct
 visit is served by the application rather than a filesystem 404.
 
+## Social previews / OGP
+
+`scripts/build_artwork_ogp.py` exports crawlable HTML documents and 1200 × 630
+PNG social-preview images from the same prepared Artist/Work vectors used by the
+canvas. It defaults to the current artwork year for each public Artist, keeping
+the deploy payload bounded while covering the normal individual-artwork links.
+
+```sh
+python3 scripts/build_artwork_ogp.py --site-url https://your-woven-domain.example
+```
+
+The command writes static pages below `artists/<classii-id>/<slug>/<year>/` and
+their PNGs below `public/og/artworks/`. Static pages take precedence over the
+SPA fallback in `public/_redirects`; routes not prerendered remain interactive
+through that fallback. Use `--years active` to export every year in which one of
+the 100 public Artists acquires vectors (rather than only its default year).
+
 For a local server without route rewrites, the equivalent artwork view can be
 opened with `/?artist=<classii-id>&slug=<slug>&year=<year>`.
 

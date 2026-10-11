@@ -1,5 +1,5 @@
 const DATA_PREFIX = '/public/data/';
-const COMPRESSED_DATA_KEYS = new Set(['woven-sample.json']);
+const COMPRESSED_DATA_ENCODINGS = new Map([['woven-sample.json', 'br']]);
 
 function contentType(path) {
   if (path.endsWith('.bin')) return 'application/octet-stream';
@@ -22,11 +22,15 @@ export default {
           'Cache-Control': 'public, max-age=86400, s-maxage=31536000, immutable',
         };
         // R2's binding does not currently surface stored content-encoding in
-        // httpMetadata. This dataset key is deliberately stored as gzip.
-        if (COMPRESSED_DATA_KEYS.has(key)) headers['Content-Encoding'] = 'gzip';
+        // httpMetadata. The runtime ledger is deliberately stored as Brotli.
+        const encoding = COMPRESSED_DATA_ENCODINGS.get(key);
+        if (encoding) headers['Content-Encoding'] = encoding;
         else if (object.httpMetadata?.contentEncoding) headers['Content-Encoding'] = object.httpMetadata.contentEncoding;
         return new Response(object.body, {
           headers,
+          // Do not let Cloudflare re-compress a body that was compressed at
+          // build time. Without this, a Brotli payload is encoded twice.
+          encodeBody: encoding ? 'manual' : 'automatic',
         });
       }
     }

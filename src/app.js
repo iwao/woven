@@ -806,6 +806,7 @@ async function configureArtworkRoute() {
   const displayName = entry.displayName || artist.name;
   updateArtworkMetadata(entry, displayName, nearestYear);
   configureArtworkPanel(entry, artist, displayName, nearestYear);
+  $('#artwork-plate').hidden = false;
   const pageTitle = $('#global-page-title');
   pageTitle.textContent = `${displayName} · ${nearestYear}`;
   pageTitle.hidden = false;

@@ -111,6 +111,16 @@ function updateArtworkMetadata(entry, displayName, year) {
 
 function tileKey() { return document.fullscreenElement === canvas.parentElement ? WIDE_OVERVIEW_KEY : LOD_KEYS[0]; }
 function tileFor(modeIndex, layer) { return tiles.get(`${tileKey(modeIndex)}:${layer}`); }
+function tileDeltaWeight(tile, cellIndex, until) {
+  const start = tile.deltaStart[cellIndex], end = start + tile.deltaCount[cellIndex]; let total = 0;
+  for (let offset = start; offset < end; offset += 1) if (tile.deltaYears[offset] <= until) total += tile.deltaWeights[offset];
+  return total;
+}
+function tileYearDelta(tile, cellIndex, year) {
+  const start = tile.deltaStart[cellIndex], end = start + tile.deltaCount[cellIndex];
+  for (let offset = start; offset < end; offset += 1) if (tile.deltaYears[offset] === year) return tile.deltaWeights[offset];
+  return 0;
+}
 
 function visibleArtists() { return data.artists; }
 function rememberBounded(map, key, value, limit) { if (map.has(key)) map.delete(key); map.set(key, value); while (map.size > limit) map.delete(map.keys().next().value); return value; }
@@ -122,17 +132,22 @@ function artistLinks(modeIndex = lodIndex) { const current = cache(); if (curren
 function tileLinks(modeIndex, layer, temporalIndex = yearIndex) {
   const key = `${temporalIndex}:${tileKey(modeIndex)}:${layer}`, cached = tileCache.get(key); if (cached) return cached;
   const tile = tileFor(modeIndex, layer), until = data.years[temporalIndex];
-  const result = tile.cells.map((cell) => ({...cell, weight: cell.deltas.reduce((sum, [year, weight]) => year <= until ? sum + weight : sum, 0)})).filter((cell) => cell.weight > 0);
+  const result = [];
+  for (let index = 0; index < tile.cellCount; index += 1) {
+    const weight = tileDeltaWeight(tile, index, until);
+    if (weight > 0) result.push({x: tile.cellX[index], y: tile.cellY[index], weight});
+  }
   tileCache.set(key, result); return result;
 }
 function yearDeltaColumns(modeIndex, layer, index) {
   const key = `${tileKey(modeIndex)}:${layer}:${index}`, cached = yearDeltaCache.get(key); if (cached) return cached;
   const year = data.years[index], columns = new Map();
-  for (const cell of tileFor(modeIndex, layer).cells) {
-    const delta = cell.deltas.find(([cellYear]) => cellYear === year)?.[1];
+  const tile = tileFor(modeIndex, layer);
+  for (let cellIndex = 0; cellIndex < tile.cellCount; cellIndex += 1) {
+    const delta = tileYearDelta(tile, cellIndex, year);
     if (!delta) continue;
-    const column = columns.get(cell.x) || [];
-    column.push({...cell, weight: delta}); columns.set(cell.x, column);
+    const x = tile.cellX[cellIndex], column = columns.get(x) || [];
+    column.push({x, y: tile.cellY[cellIndex], weight: delta}); columns.set(x, column);
   }
   yearDeltaCache.set(key, columns); return columns;
 }
@@ -733,8 +748,17 @@ function setPalette(id) {
 async function loadTiles() {
   const base = '/public/data/woven-tiles', manifest = await fetch(`${base}/manifest.json?v=${DATASET_VERSION}`).then((response) => response.json());
   await Promise.all([...LOD_KEYS, WIDE_OVERVIEW_KEY].flatMap((lod) => ['artist', 'work'].map(async (layer) => {
-    const info = manifest.layers[`${lod}/${layer}`], text = await fetch(`${base}/${info.artifact}?v=${DATASET_VERSION}`).then((response) => response.text());
-    tiles.set(`${lod}:${layer}`, {...info, cells: text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))});
+    const info = manifest.layers[`${lod}/${layer}`], buffer = await fetch(`${base}/${info.artifact}?v=${DATASET_VERSION}`).then((response) => response.arrayBuffer());
+    const header = new DataView(buffer, 0, 32), magic = String.fromCharCode(...new Uint8Array(buffer, 0, 4));
+    if (magic !== 'WVTL' || header.getUint16(4, true) !== 1) throw new Error(`Unsupported WOVEN tile: ${info.artifact}`);
+    const width = header.getUint32(8, true), height = header.getUint32(12, true), cellCount = header.getUint32(16, true), deltaCount = header.getUint32(20, true), cellsOffset = header.getUint32(24, true), deltasOffset = header.getUint32(28, true);
+    const cellBytes = 12, deltaBytes = 8;
+    if (deltasOffset + deltaCount * deltaBytes > buffer.byteLength) throw new Error(`Corrupt WOVEN tile: ${info.artifact}`);
+    const cellX = new Uint16Array(cellCount), cellY = new Uint16Array(cellCount), deltaStart = new Uint32Array(cellCount), deltaCountByCell = new Uint16Array(cellCount), view = new DataView(buffer);
+    for (let index = 0; index < cellCount; index += 1) { const offset = cellsOffset + index * cellBytes; cellX[index] = view.getUint16(offset, true); cellY[index] = view.getUint16(offset + 2, true); deltaStart[index] = view.getUint32(offset + 4, true); deltaCountByCell[index] = view.getUint16(offset + 8, true); }
+    const deltaYears = new Uint16Array(deltaCount), deltaWeights = new Float32Array(deltaCount);
+    for (let index = 0; index < deltaCount; index += 1) { const offset = deltasOffset + index * deltaBytes; deltaYears[index] = view.getUint16(offset, true); deltaWeights[index] = view.getFloat32(offset + 4, true); }
+    tiles.set(`${lod}:${layer}`, {...info, width, height, cellCount, cellX, cellY, deltaStart, deltaCount: deltaCountByCell, deltaYears, deltaWeights});
   })));
 }
 async function configureArtworkRoute() {

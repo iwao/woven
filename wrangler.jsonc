@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "woven",
+  "main": "cloudflare/worker.js",
+  "compatibility_date": "2026-10-11",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS"
+  },
+  "r2_buckets": [
+    {
+      "binding": "WOVEN_DATA",
+      "bucket_name": "woven-data"
+    }
+  ]
+}

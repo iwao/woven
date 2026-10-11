@@ -9,23 +9,10 @@ bucket=${WOVEN_R2_BUCKET:-woven-data}
 parts_dir=$(mktemp -d)
 trap 'rm -rf "$parts_dir"' EXIT
 
-# Wrangler's direct object upload is intentionally kept below its large-object
-# threshold. The Worker concatenates these immutable byte ranges when the app
-# requests woven-sample.json, so the browser keeps its existing contract.
-split -b 24m -a 3 "$data/woven-sample.json" "$parts_dir/part-"
-parts=()
-for file in "$parts_dir"/part-*; do
-  key="woven-sample/$(basename "$file")"
-  npx wrangler r2 object put "$bucket/$key" --remote --file="$file" --content-type="application/octet-stream"
-  parts+=("$key")
-done
-printf '{"parts":[' > "$parts_dir/parts.json"
-for index in "${!parts[@]}"; do
-  (( index )) && printf ',' >> "$parts_dir/parts.json"
-  printf '"%s"' "${parts[index]}" >> "$parts_dir/parts.json"
-done
-printf ']}' >> "$parts_dir/parts.json"
-npx wrangler r2 object put "$bucket/woven-sample/parts.json" --remote --file="$parts_dir/parts.json" --content-type="application/json"
+# The browser transparently expands this single gzip object. This avoids
+# downloading the 193MB JSON ledger uncompressed before the UI can initialise.
+gzip -9 -c "$data/woven-sample.json" > "$parts_dir/woven-sample.json.gz"
+npx wrangler r2 object put "$bucket/woven-sample.json" --remote --file="$parts_dir/woven-sample.json.gz" --content-type="application/json" --content-encoding="gzip"
 npx wrangler r2 object put "$bucket/woven-tiles/manifest.json" --remote --file="$data/woven-tiles/manifest.json" --content-type="application/json"
 for file in "$data"/woven-tiles/overview_artist.bin "$data"/woven-tiles/overview_work.bin "$data"/woven-tiles/overview-wide_artist.bin "$data"/woven-tiles/overview-wide_work.bin; do
   npx wrangler r2 object put "$bucket/woven-tiles/$(basename "$file")" --remote --file="$file" --content-type="application/octet-stream"

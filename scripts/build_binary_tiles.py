@@ -16,7 +16,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DIRECTORY = ROOT / "public" / "data" / "woven-tiles"
+DEFAULT_SOURCE_DIRECTORY = ROOT.parent / "woven-data" / "output" / "woven_tiles_artist_first_5000_rism"
+DEFAULT_OUTPUT_DIRECTORY = ROOT / "public" / "data" / "woven-tiles"
 MAGIC = b"WVTL"
 VERSION = 1
 HEADER = struct.Struct("<4sHHIIIIII")
@@ -25,8 +26,8 @@ DELTA = struct.Struct("<HHf")
 RUNTIME_LAYERS = ("overview/artist", "overview/work", "overview-wide/artist", "overview-wide/work")
 
 
-def pack_layer(directory: Path, key: str, info: dict[str, object]) -> dict[str, object]:
-    source = directory / str(info["artifact"])
+def pack_layer(source_directory: Path, output_directory: Path, key: str, info: dict[str, object]) -> dict[str, object]:
+    source = source_directory / str(info["artifact"])
     cells: list[tuple[int, int, int, int]] = []
     deltas: list[tuple[int, float]] = []
     with source.open(encoding="utf-8") as handle:
@@ -38,7 +39,8 @@ def pack_layer(directory: Path, key: str, info: dict[str, object]) -> dict[str, 
                 raise ValueError(f"too many deltas in one cell: {source}")
             deltas.extend((int(year), float(weight)) for year, weight in values)
             cells.append((int(row["x"]), int(row["y"]), start, len(values)))
-    target = source.with_suffix(".bin")
+    target = output_directory / source.with_suffix(".bin").name
+    target.parent.mkdir(parents=True, exist_ok=True)
     cells_offset = HEADER.size
     deltas_offset = cells_offset + CELL.size * len(cells)
     with target.open("wb") as handle:
@@ -59,17 +61,18 @@ def pack_layer(directory: Path, key: str, info: dict[str, object]) -> dict[str, 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build WOVEN typed-array runtime tiles.")
-    parser.add_argument("--directory", type=Path, default=DEFAULT_DIRECTORY)
+    parser.add_argument("--source-directory", type=Path, default=DEFAULT_SOURCE_DIRECTORY, help="JSONL tile build input from woven-data output")
+    parser.add_argument("--output-directory", type=Path, default=DEFAULT_OUTPUT_DIRECTORY, help="deployable binary tile output")
     args = parser.parse_args()
-    manifest_path = args.directory / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = json.loads((args.source_directory / "manifest.json").read_text(encoding="utf-8"))
     layers = dict(manifest["layers"])
     for key in RUNTIME_LAYERS:
-        layers[key] = pack_layer(args.directory, key, layers[key])
+        layers[key] = pack_layer(args.source_directory, args.output_directory, key, layers[key])
     manifest["layers"] = layers
     manifest["runtime_encoding"] = "woven_tile_binary_v1"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"directory": str(args.directory), "layers": list(RUNTIME_LAYERS)}, ensure_ascii=False))
+    args.output_directory.mkdir(parents=True, exist_ok=True)
+    (args.output_directory / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({"source": str(args.source_directory), "output": str(args.output_directory), "layers": list(RUNTIME_LAYERS)}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

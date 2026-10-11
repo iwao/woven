@@ -26,6 +26,7 @@ let paletteId = '5', palette = PALETTES[paletteId];
 function paletteRgbValues(value) { return Object.fromEntries(['paper', 'base', 'bright', 'accent', 'outgoing', 'incoming'].map((key) => [key, rgb(value[key])])); }
 let paletteColors = paletteRgbValues(palette);
 let data, selected = 'all', yearIndex = 0, lodIndex = 0, cameraZoom = 0, cameraPan = {x: 0, y: 0}, dragState, ignoreNextClick = false, sound = false, glowVolume = .5, highlightVolume = .15, clackVolume = .1, bassoVolume = .3, reverbAmount = .6, audio, audioBus, reverbBus, glowBus, highlightBus, clackBus, bassoBus, glowInstrument = 'synth', weaveClackId, selectedLink;
+let artworkCatalog = new Map();
 let relationCache = {key: '', raw: [], works: new Map(), artists: new Map()};
 let tileCache = new Map(), tiles = new Map();
 const compactScaleCache = new WeakMap();
@@ -34,7 +35,7 @@ const artistOverlayCache = new Map();
 const overlayPulseCellCache = new Map();
 const overlayRenderCache = new Map();
 const bassoSampleCache = new Map();
-let yearAnimation, animationFrame;
+let yearAnimation, animationFrame, fullscreenChromeTimer, loopArtworkYear = false;
 const LOD_KEYS = ['overview'];
 const WIDE_OVERVIEW_KEY = 'overview-wide';
 const DATASET_VERSION = 'artist-first-5000-20261010-prebirth-guard-1';
@@ -49,6 +50,7 @@ const DEFAULT_WEAVE_CLACK = '489000__phonosupf__wood-bell.wav';
 // the available drawing surface: otherwise fullscreen spreads the columns out
 // while leaving a fixed-pixel flare too small to read as light.
 const GLOW_REFERENCE_SIZE = {width: 1280, height: 620};
+const FABRIC_INSET = 30;
 const instrumentCatalog = new Map(), loadedInstrumentPacks = new Map();
 const waveCatalog = new Map(), weaveClackBuffers = new Map(), weaveClackPromises = new Map();
 const ARTWORK_CATALOG_URL = '/public/data/artworks/catalog.json?v=artist-birth-years-2';
@@ -64,6 +66,11 @@ function artworkRoute() {
   return undefined;
 }
 const requestedArtwork = artworkRoute();
+function artworkUrl(entry, year) {
+  const isLocalPreview = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
+  if (isLocalPreview) return `/?${new URLSearchParams({artist: entry.classiiId, slug: entry.slug, year: String(year)})}`;
+  return `/artists/${encodeURIComponent(entry.classiiId)}/${encodeURIComponent(entry.slug)}/${year}`;
+}
 
 function tileKey() { return document.fullscreenElement === canvas.parentElement ? WIDE_OVERVIEW_KEY : LOD_KEYS[0]; }
 function tileFor(modeIndex, layer) { return tiles.get(`${tileKey(modeIndex)}:${layer}`); }
@@ -132,7 +139,7 @@ function prepareLod() {
   data._lodModes = [overview, cluster, data.artists.map((a) => leaves.get(a.id))].map((ids) => { const positions = new Map(); ids.forEach((id, index) => { const descendants = [id]; while (descendants.length) { const node = byId.get(descendants.pop()); if (node.artist) positions.set(node.artist, index); else descendants.push(...node.children); } }); return {nodes: ids.map((id) => byId.get(id)), positions}; });
   data._artistsById = new Map(data.artists.map((artist) => [artist.id, artist])); data._worksById = new Map(data.works.map((work, index) => [work.id, {...work, index}]));
 }
-function geometry(width, height, count) { const artistTop = 116, artistBottom = Math.max(178, height * .29), workTop = artistBottom + 38, workBottom = height - 30; return {x: (i) => 20 + (width - 40) * i / Math.max(1, count - 1), artistY: (i) => artistTop + (artistBottom - artistTop) * i / Math.max(1, data.artists.length - 1), workY: (i) => workTop + (workBottom - workTop) * i / Math.max(1, data.works.length - 1), artistTop, artistBottom, workTop, workBottom}; }
+function geometry(width, height, count) { const artistTop = FABRIC_INSET, artistBottom = Math.max(178, height * .29), workTop = artistBottom + 38, workBottom = height - FABRIC_INSET; return {x: (i) => FABRIC_INSET + (width - FABRIC_INSET * 2) * i / Math.max(1, count - 1), artistY: (i) => artistTop + (artistBottom - artistTop) * i / Math.max(1, data.artists.length - 1), workY: (i) => workTop + (workBottom - workTop) * i / Math.max(1, data.works.length - 1), artistTop, artistBottom, workTop, workBottom}; }
 function point(points, x, y, weight, max, selected, opacity, modeIndex = 2) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(max)), overview = modeIndex === 0, cluster = modeIndex === 1;
   const size = selected ? 6.6 : overview ? Math.min(4.2, 2 + Math.sqrt(weight) * .16) : cluster ? Math.min(4.8, 1.7 + Math.sqrt(weight) * .38) : Math.min(4.2, 1.1 + Math.sqrt(weight) * .44);
@@ -151,7 +158,7 @@ function constrainPan(width = canvas.clientWidth, height = canvas.clientHeight) 
   const scale = cameraScale();
   // Treat the visible matrix as a bounded world with its top-left at (0, 0).
   // Panning is limited so the viewport never exposes beyond its X/Y extent.
-  const bounds = {left: 20, right: width - 20, top: 54, bottom: height - 30};
+  const bounds = {left: FABRIC_INSET, right: width - FABRIC_INSET, top: FABRIC_INSET, bottom: height - FABRIC_INSET};
   const centerX = width / 2, centerY = height / 2, inverseZoom = 1 - 1 / scale;
   const minX = (centerX - bounds.right) * inverseZoom, maxX = (centerX - bounds.left) * inverseZoom;
   const minY = (centerY - bounds.bottom) * inverseZoom, maxY = (centerY - bounds.top) * inverseZoom;
@@ -163,9 +170,8 @@ function appendLodLayer(points, modeIndex, opacity, width, height, maxWeight, te
   for (const layer of ['artist', 'work']) {
     const tile = tileFor(modeIndex, layer), yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
     const cells = tileLinks(modeIndex, layer, temporalIndex), compact = modeIndex === 0, scale = compact ? compactScale(cells) : maxWeight;
-    for (const cell of cells) point(points, 20 + (width - 40) * cell.x / Math.max(1, tile.width - 1), yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), cell.weight, scale, false, opacity, modeIndex);
+    for (const cell of cells) point(points, FABRIC_INSET + (width - FABRIC_INSET * 2) * cell.x / Math.max(1, tile.width - 1), yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), cell.weight, scale, false, opacity, modeIndex);
   }
-  const color = paletteColors.accent; nodes.forEach((node, i) => points.push(layout.x(i), 54, ...color, .72 * opacity, 4.4));
 }
 function overlayPoint(points, x, y, weight, maxWeight, opacity, modeIndex) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(maxWeight));
@@ -242,17 +248,15 @@ function appendArtistOverlay(points, modeIndex, opacity, width, height, maxWeigh
   if (selected === 'all') return;
   const rendered = overlayRenderCells(selected, modeIndex, temporalIndex), selectedArtist = data._artistsById.get(selected);
   if (!rendered || !selectedArtist) return;
-  const {overlay} = rendered, layout = geometry(width, height, data._lodModes[modeIndex].nodes.length), sourceWeight = [...overlay.works.values()].reduce((sum, weight) => sum + weight, 0), sourceIntensity = Math.min(1, Math.log1p(sourceWeight) / Math.log1p(maxWeight));
+  const {overlay} = rendered, layout = geometry(width, height, data._lodModes[modeIndex].nodes.length);
   const drawCells = (layer, folded, reverse) => {
     const {tile, cells} = folded, yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
     for (const cell of cells) {
-      const x = 20 + (width - 40) * cell.x / Math.max(1, tile.width - 1), y = yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1);
+      const x = FABRIC_INSET + (width - FABRIC_INSET * 2) * cell.x / Math.max(1, tile.width - 1), y = yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1);
       if (reverse) reverseOverlayPoint(points, x, y, cell.weight, maxWeight, opacity, modeIndex); else overlayPoint(points, x, y, cell.weight, maxWeight, opacity, modeIndex);
     }
   };
   drawCells('artist', rendered.artistIncoming, true); drawCells('work', rendered.workIncoming, true); drawCells('artist', rendered.artistOutgoing, false); drawCells('work', rendered.workOutgoing, false);
-  const sourceTile = tileFor(modeIndex, 'artist'), sourceX = lodMatrixPixel(selectedArtist.position, data.artists.length, sourceTile.width, 1024);
-  points.push(20 + (width - 40) * sourceX / Math.max(1, sourceTile.width - 1), 54, ...paletteColors.outgoing, (.62 + sourceIntensity * .36) * opacity, 5.2 + Math.min(4.8, Math.sqrt(sourceWeight) * .16));
 }
 function appendYearPulse(points, pulseCandidates, width, height) {
   if (!yearAnimation) return;
@@ -270,7 +274,7 @@ function appendYearPulse(points, pulseCandidates, width, height) {
       for (let x = first; x <= last; x += 1) {
         const columnPhase = (phase - x / Math.max(1, tile.width - 1) * columnDelay) / columnSpan;
         if (columnPhase < 0 || columnPhase > 1) continue;
-        const xPosition = 20 + (width - 40) * x / Math.max(1, tile.width - 1), beamY = yTop + (yBottom - yTop) * columnPhase;
+        const xPosition = FABRIC_INSET + (width - FABRIC_INSET * 2) * x / Math.max(1, tile.width - 1), beamY = yTop + (yBottom - yTop) * columnPhase;
         for (const cell of columns.get(x) || []) {
           const cellY = yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), distance = Math.abs(cellY - beamY) / Math.max(1, yBottom - yTop);
           if (distance > .035) continue;
@@ -308,7 +312,7 @@ function details(event) {
   const worldY = (event.clientY - rect.top - rect.height / 2 - cameraPan.y) / viewScale + rect.height / 2;
   const nodes = data._lodModes[lodIndex].nodes;
   const layout = geometry(rect.width, rect.height, nodes.length);
-  const source = Math.max(0, Math.min(nodes.length - 1, Math.round((worldX - 20) / (rect.width - 40) * (nodes.length - 1))));
+  const source = Math.max(0, Math.min(nodes.length - 1, Math.round((worldX - FABRIC_INSET) / (rect.width - FABRIC_INSET * 2) * (nodes.length - 1))));
   const y = worldY; let link, target;
   if (y >= layout.artistTop && y <= layout.artistBottom) {
     const index = Math.max(0, Math.min(data.artists.length - 1, Math.round((y - layout.artistTop) / (layout.artistBottom - layout.artistTop) * (data.artists.length - 1))));
@@ -539,9 +543,19 @@ function playPulseCandidates(candidates) {
   if (highlights.length) { const brightest = highlights.reduce((largest, candidate) => candidate.weight > largest.weight ? candidate : largest); highlightTone(brightest.weight, brightest.spatial); }
 }
 function setCanvasYear(year, animate = true) {
-  const digits = String(year).padStart(4, '0').slice(-4), display = $('#canvas-year');
-  display.setAttribute('aria-label', `Current year: ${year}`);
-  [...display.children].forEach((digit, index) => {
+  const digits = String(year).padStart(4, '0').slice(-4), display = $('#canvas-year'), caption = $('#canvas-caption'), artist = selected === 'all' ? undefined : data?._artistsById.get(selected);
+  const catalogEntry = artist && artworkCatalog.get(artist.id), optionName = artist && [...$('#featured-artist').options].find((option) => option.value === artist.id)?.textContent.replace(/\s·\s\d{4}$/, ''), publicArtistName = catalogEntry?.displayName || optionName || artist?.name;
+  const label = artist ? `${publicArtistName} · ${year}` : String(year), captionLabel = `WOVEN — ${label}`;
+  display.setAttribute('aria-label', captionLabel); $('#canvas-year-artist').textContent = publicArtistName || '';
+  caption.replaceChildren();
+  const title = document.createElement('span'); title.className = 'canvas-caption-title'; title.textContent = captionLabel; caption.append(title);
+  if (!requestedArtwork && catalogEntry) {
+    const link = document.createElement('a');
+    link.className = 'canvas-caption-link'; link.href = artworkUrl(catalogEntry, year);
+    link.textContent = 'Open this artwork';
+    caption.append(link);
+  }
+  [...display.querySelectorAll('.canvas-year-digit')].forEach((digit, index) => {
     const next = digits[index], value = digit.firstElementChild;
     if (value.textContent === next) return;
     digit.dataset.previous = value.textContent; value.textContent = next;
@@ -550,10 +564,12 @@ function setCanvasYear(year, animate = true) {
   });
 }
 function setCanvasYearVisibility(visible) {
-  const display = $('#canvas-year'), control = $('#canvas-year-toggle');
+  const display = $('#canvas-year'), caption = $('#canvas-caption'), control = $('#canvas-year-toggle');
   display.hidden = !visible;
   display.classList.toggle('is-hidden', !visible);
   display.setAttribute('aria-hidden', String(!visible));
+  caption.hidden = !visible;
+  caption.setAttribute('aria-hidden', String(!visible));
   control.setAttribute('aria-pressed', String(visible));
   control.textContent = visible ? 'Year display: On' : 'Year display: Off';
 }
@@ -592,11 +608,16 @@ function animateYear() {
   if (!yearAnimation) return;
   if (performance.now() - yearAnimation.startedAt < yearAnimation.duration + yearAnimation.dissolveDuration) { animationFrame = requestAnimationFrame(animateYear); return; }
   yearIndex = yearAnimation.yearIndex;
+  if (requestedArtwork) {
+    if (loopArtworkYear) { beginYearAnimation(yearIndex); animationFrame = requestAnimationFrame(animateYear); return; }
+    stopYearAnimation(false); update(); return;
+  }
   if (yearIndex >= data.years.length - 1) { stopYearAnimation(false); update(); return; }
   selectedLink = undefined; beginYearAnimation(yearIndex + 1); animationFrame = requestAnimationFrame(animateYear);
 }
 function playYears() {
   if (yearAnimation) { stopYearAnimation(); return; }
+  if (requestedArtwork) { setPlaybackControl(true); beginYearAnimation(yearIndex); animationFrame = requestAnimationFrame(animateYear); return; }
   if (yearIndex >= data.years.length - 1) yearIndex = -1;
   const targetIndex = Math.min(data.years.length - 1, yearIndex + 1);
   setPlaybackControl(true); beginYearAnimation(targetIndex); animationFrame = requestAnimationFrame(animateYear);
@@ -618,8 +639,22 @@ async function toggleFullscreen() {
   else await canvas.parentElement.requestFullscreen({navigationUI: 'hide'});
 }
 function syncFullscreenControl() {
-  setFullscreenControl(document.fullscreenElement === canvas.parentElement);
+  const active = document.fullscreenElement === canvas.parentElement;
+  setFullscreenControl(active); setFullscreenChromeVisible(false);
   draw();
+}
+function setFullscreenChromeVisible(visible) {
+  const wrap = canvas.parentElement;
+  if (fullscreenChromeTimer) { clearTimeout(fullscreenChromeTimer); fullscreenChromeTimer = undefined; }
+  wrap.classList.toggle('is-chrome-visible', visible);
+  if (visible && document.fullscreenElement === wrap) fullscreenChromeTimer = setTimeout(() => setFullscreenChromeVisible(false), 1800);
+}
+function revealFullscreenChrome(event) {
+  const wrap = canvas.parentElement;
+  if (document.fullscreenElement !== wrap) return;
+  const bounds = wrap.getBoundingClientRect();
+  if (event.clientY >= bounds.bottom - 132) setFullscreenChromeVisible(true);
+  else setFullscreenChromeVisible(false);
 }
 function setFullscreenControl(active) {
   const control = $('#fullscreen'), label = active ? 'Exit fullscreen' : 'Enter fullscreen';
@@ -645,18 +680,21 @@ async function configureArtworkRoute() {
   if (!requestedArtwork) return;
   const response = await fetch(ARTWORK_CATALOG_URL);
   if (!response.ok) throw new Error('Unable to load the WOVEN artwork catalogue.');
-  const catalogue = await response.json(), entry = catalogue.artists.find((artist) => artist.classiiId === requestedArtwork.classiiId);
+  const catalogue = await response.json(); artworkCatalog = new Map(catalogue.artists.map((artist) => [artist.classiiId, artist]));
+  const entry = artworkCatalog.get(requestedArtwork.classiiId);
   if (!entry) throw new Error('This Artist is not in the public WOVEN artwork collection.');
   const artist = data._artistsById.get(entry.classiiId);
   if (!artist) throw new Error('The requested Artist is unavailable in this dataset.');
   const nearestYear = data.years.reduce((best, candidate) => Math.abs(candidate - requestedArtwork.year) < Math.abs(best - requestedArtwork.year) ? candidate : best, data.years[0]);
   selected = artist.id; $('#artist').value = artist.id; yearIndex = data.years.indexOf(nearestYear); $('#year').value = yearIndex;
-  clearOverlayCaches(); document.body.classList.add('artwork-mode');
+  clearOverlayCaches(); document.body.classList.add('artwork-route'); setupArtworkPlayback();
   const displayName = entry.displayName || artist.name;
-  $('#artwork-plate').hidden = false; $('#artwork-artist-name').textContent = displayName; $('#artwork-year').textContent = String(nearestYear);
-  document.title = `${displayName} · ${nearestYear} — WOVEN`;
+  document.title = `WOVEN — ${displayName} · ${nearestYear}`;
+  const pageTitle = $('#global-page-title');
+  pageTitle.textContent = `${displayName} · ${nearestYear}`;
+  pageTitle.hidden = false;
   if (requestedArtwork.source === 'path') {
-    const canonical = `/artists/${encodeURIComponent(entry.classiiId)}/${encodeURIComponent(entry.slug)}/${nearestYear}`;
+    const canonical = artworkUrl(entry, nearestYear);
     if (location.pathname !== canonical) history.replaceState({}, '', canonical);
   } else {
     const canonical = `/?artist=${encodeURIComponent(entry.classiiId)}&slug=${encodeURIComponent(entry.slug)}&year=${nearestYear}`;
@@ -664,21 +702,37 @@ async function configureArtworkRoute() {
   }
   update();
 }
+function setupArtworkPlayback() {
+  if ($('#loop-year')) return;
+  const control = document.createElement('button');
+  control.className = 'player-icon'; control.id = 'loop-year'; control.type = 'button';
+  control.setAttribute('aria-pressed', 'false'); control.setAttribute('aria-label', 'Loop this year'); control.title = 'Loop this year';
+  control.innerHTML = '<span class="loop-icon" aria-hidden="true"></span>';
+  control.addEventListener('click', () => {
+    loopArtworkYear = !loopArtworkYear;
+    control.setAttribute('aria-pressed', String(loopArtworkYear));
+    control.setAttribute('aria-label', loopArtworkYear ? 'Stop looping this year' : 'Loop this year');
+    control.title = loopArtworkYear ? 'Stop looping this year' : 'Loop this year';
+  });
+  $('#play-years').after(control);
+}
 async function setupFeaturedArtistSelector() {
-  if (requestedArtwork) return;
   const control = $('#featured-artist'), select = $('#artist');
   try {
     const response = await fetch(ARTWORK_CATALOG_URL);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const catalogue = await response.json();
+    const catalogue = await response.json(); artworkCatalog = new Map(catalogue.artists.map((artist) => [artist.classiiId, artist]));
     control.replaceChildren(new Option('Artists · 100 limited', 'all'), ...catalogue.artists.map((artist) => new Option(`${artist.displayName || artist.name} · ${artist.birthYear}`, artist.classiiId)));
+    control.value = artworkCatalog.has(selected) ? selected : 'all';
   } catch (error) {
     console.warn('Unable to load featured Artists', error); return;
   }
   control.addEventListener('change', () => { select.value = control.value; select.dispatchEvent(new Event('change')); });
   select.addEventListener('change', () => { control.value = [...control.options].some((option) => option.value === select.value) ? select.value : 'all'; });
 }
-async function init() { data = await fetch(`/public/data/woven-sample.json?v=${DATASET_VERSION}`).then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'), paletteControl = $('#palette'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); setCanvasYearVisibility(true); $('#zoom-value').textContent = zoomLabel(); $('#scope').textContent = `${data.lod.artist_count} artists · ${data.lod.work_count} works`; $('#metrics').textContent = `${data.snapshotId} · ${data.lod.component_count} semantic regions`; year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; clearOverlayCaches(); selectedLink = undefined; update(); }); paletteControl.addEventListener('change', () => setPalette(paletteControl.value)); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); $('#canvas-year-toggle').addEventListener('click', toggleCanvasYearVisibility); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); document.addEventListener('keydown', playbackShortcut); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); setPalette(paletteControl.value); }
+async function init() { data = await fetch(`/public/data/woven-sample.json?v=${DATASET_VERSION}`).then((response) => response.json()); await loadTiles(); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'), paletteControl = $('#palette'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); setCanvasYearVisibility(true); $('#zoom-value').textContent = zoomLabel(); year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; clearOverlayCaches(); selectedLink = undefined; update(); }); paletteControl.addEventListener('change', () => setPalette(paletteControl.value)); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); $('#canvas-year-toggle').addEventListener('click', toggleCanvasYearVisibility); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setChannelVolume('glow', Number(reverbControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); document.addEventListener('keydown', playbackShortcut); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); setPalette(paletteControl.value); }
+canvas.parentElement.addEventListener('pointermove', revealFullscreenChrome);
+canvas.parentElement.addEventListener('focusin', () => { if (document.fullscreenElement === canvas.parentElement) setFullscreenChromeVisible(true); });
 function setupArtistSearch() {
   const input = $('#artist-search'), results = $('#artist-results'), select = $('#artist'), normalise = (value) => value.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase();
   const choose = (artist) => { input.value = artist.name; select.value = artist.id; select.dispatchEvent(new Event('change')); results.hidden = true; input.setAttribute('aria-expanded', 'false'); };

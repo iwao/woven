@@ -20,7 +20,7 @@ const PALETTES = {
   '2': {name: 'No.2 — Wisteria', paper: '#050505', base: '#53687e', bright: '#f5e9e2', accent: '#98a6d4', outgoing: '#f5e9e2', incoming: '#7871aa'},
   '3': {name: 'No.3 — Tangerine', paper: '#050505', base: '#4ce0b3', bright: '#ffaf87', accent: '#ff8e72', outgoing: '#ed6a5e', incoming: '#ffaf87'},
   '4': {name: 'No.4 — Prussian blue', paper: '#050505', base: '#0353a4', bright: '#b9d6f2', accent: '#006daa', outgoing: '#b9d6f2', incoming: '#003559'},
-  '5': {name: 'Default — WOVEN', paper: '#000000', base: '#e2d5c5', bright: '#f99848', accent: '#f99848', outgoing: '#6a8895', incoming: '#6a8895'},
+  '5': {name: 'Default — WOVEN', paper: '#000000', base: '#e2d5c5', bright: '#f99848', accent: '#f99848', outgoing: '#f2ee82', incoming: '#f2ee82'},
 };
 let paletteId = '5', palette = PALETTES[paletteId];
 function paletteRgbValues(value) { return Object.fromEntries(['paper', 'base', 'bright', 'accent', 'outgoing', 'incoming'].map((key) => [key, rgb(value[key])])); }
@@ -63,6 +63,7 @@ const LOD_KEYS = ['overview'];
 const WIDE_OVERVIEW_KEY = 'overview-wide';
 const DATASET_VERSION = 'artist-first-5000-20261010-prebirth-guard-1';
 const YEAR_DURATION_AT_1X = 1400;
+const YEAR_ARRIVAL_DURATION = 340;
 const BASSO_X_BANDS = 7;
 const ARTIST_OVERLAY_CACHE_LIMIT = 2;
 const OVERLAY_RENDER_CACHE_LIMIT = 24;
@@ -198,13 +199,13 @@ function appendLodLayer(points, modeIndex, opacity, width, height, maxWeight, te
 }
 function overlayPoint(points, x, y, weight, maxWeight, opacity, modeIndex) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(maxWeight));
-  const boost = modeIndex === 0 ? 1.62 : modeIndex === 1 ? 1.27 : 1, size = (3.2 + Math.sqrt(weight) * .28) * boost;
+  const boost = modeIndex === 0 ? 1.62 : modeIndex === 1 ? 1.27 : 1, size = (3.2 + Math.sqrt(weight) * .28) * boost * .84;
   points.push(x, y, ...paletteColors.outgoing, (.20 + intensity * .14) * opacity, size * 2.75, .94);
   points.push(x, y, ...paletteColors.outgoing, (.58 + intensity * .30) * opacity, size, .22);
 }
 function reverseOverlayPoint(points, x, y, weight, maxWeight, opacity, modeIndex) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(maxWeight));
-  const boost = modeIndex === 0 ? 1.35 : modeIndex === 1 ? 1.16 : 1, size = (3.1 + Math.sqrt(weight) * .28) * boost;
+  const boost = modeIndex === 0 ? 1.35 : modeIndex === 1 ? 1.16 : 1, size = (3.1 + Math.sqrt(weight) * .28) * boost * .84;
   points.push(x, y, ...paletteColors.incoming, (.19 + intensity * .14) * opacity, size * 2.65, .94);
   points.push(x, y, ...paletteColors.incoming, (.56 + intensity * .32) * opacity, size, .22);
 }
@@ -283,6 +284,26 @@ function appendArtistOverlay(points, modeIndex, opacity, width, height, maxWeigh
   };
   drawCells('artist', rendered.artistIncoming, true); drawCells('work', rendered.workIncoming, true); drawCells('artist', rendered.artistOutgoing, false); drawCells('work', rendered.workOutgoing, false);
 }
+function appendYearArrival(pulses, width, height) {
+  if (!yearAnimation) return;
+  const elapsed = performance.now() - yearAnimation.startedAt;
+  if (elapsed < 0 || elapsed >= YEAR_ARRIVAL_DURATION) return;
+  // Before the scan begins, let the newly added field acknowledge the change
+  // together. This is deliberately quiet: it reads as the fabric taking a
+  // breath, then hands focus back to the left-to-right weaving motion.
+  const phase = elapsed / YEAR_ARRIVAL_DURATION, flare = Math.min(1, elapsed / 42) * Math.pow(1 - phase, 1.55), responsiveGlow = glowScale(width, height);
+  for (const {index, opacity} of lodLayers()) {
+    const layout = geometry(width, height, data._lodModes[index].nodes.length);
+    for (const layer of ['artist', 'work']) {
+      const tile = tileFor(index, layer), yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
+      for (const cells of yearDeltaColumns(index, layer, yearAnimation.yearIndex).values()) for (const cell of cells) {
+        const intensity = Math.min(1, Math.log1p(cell.weight) / 2.8), x = FABRIC_INSET + (width - FABRIC_INSET * 2) * cell.x / Math.max(1, tile.width - 1), y = yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), size = (2.5 + Math.min(4.6, Math.sqrt(cell.weight) * .5)) * responsiveGlow;
+        pulses.push(x, y, ...paletteColors.accent, (.045 + intensity * .07) * flare * opacity, size * 2.6, .94);
+        pulses.push(x, y, ...paletteColors.bright, (.07 + intensity * .13) * flare * opacity, size, .52);
+      }
+    }
+  }
+}
 function appendYearPulse(points, pulseCandidates, width, height) {
   if (!yearAnimation) return;
   const elapsed = performance.now() - yearAnimation.startedAt;
@@ -327,7 +348,7 @@ function draw() {
   const timeStates = yearAnimation && dissolve > 0 ? [{index: yearIndex, opacity: 1 - dissolve}, {index: yearAnimation.yearIndex, opacity: dissolve}] : [{index: yearIndex, opacity: 1}];
   const allLinks = timeStates.flatMap((timeState) => layers.flatMap(({index}) => [...tileLinks(index, 'artist', timeState.index), ...tileLinks(index, 'work', timeState.index)]));
   const max = allLinks.reduce((largest, link) => Math.max(largest, link.weight), 1);
-  const points = [], pulses = [], pulseCandidates = [], viewScale = cameraScale(); constrainPan(rect.width, rect.height); timeStates.forEach((timeState) => layers.forEach(({index, opacity}) => { const layerOpacity = opacity * timeState.opacity; appendLodLayer(points, index, layerOpacity, rect.width, rect.height, max, timeState.index); appendArtistOverlay(points, index, layerOpacity, rect.width, rect.height, max, timeState.index); })); appendYearPulse(pulses, pulseCandidates, rect.width, rect.height); renderPoints(points, pulses, rect.width, rect.height, viewScale); playPulseCandidates(pulseCandidates); playBassoContinuo();
+  const points = [], pulses = [], pulseCandidates = [], viewScale = cameraScale(); constrainPan(rect.width, rect.height); timeStates.forEach((timeState) => layers.forEach(({index, opacity}) => { const layerOpacity = opacity * timeState.opacity; appendLodLayer(points, index, layerOpacity, rect.width, rect.height, max, timeState.index); appendArtistOverlay(points, index, layerOpacity, rect.width, rect.height, max, timeState.index); })); appendYearArrival(pulses, rect.width, rect.height); appendYearPulse(pulses, pulseCandidates, rect.width, rect.height); renderPoints(points, pulses, rect.width, rect.height, viewScale); playPulseCandidates(pulseCandidates); playBassoContinuo();
 }
 function details(event) {
   if (selected === 'all') return;

@@ -3,20 +3,64 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Language" content="en" />
     <title>About — WOVEN</title>
-    <style>
-      @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap');
-      :root { color-scheme:dark; --ink:#dedede; --muted:#929292; --paper:#101010; --line:#383838; }
-      * { box-sizing:border-box; } body { margin:0; min-height:100vh; display:grid; place-items:center; padding:28px; background:var(--paper); color:var(--ink); font-family:"DM Mono",monospace; }
-      main { width:min(640px,100%); } a { color:var(--ink); } .back { color:var(--muted); font-size:10px; letter-spacing:.14em; text-decoration:none; } h1 { margin:42px 0 16px; font:clamp(42px,9vw,78px)/.9 "Instrument Serif",serif; font-weight:400; } p { max-width:530px; color:var(--muted); font-size:12px; line-height:1.8; } footer { margin-top:48px; padding-top:14px; border-top:1px solid var(--line); color:var(--muted); font-size:9px; }
-    </style>
+    <meta name="description" content="About WOVEN, an interactive data artwork woven from more than five centuries of documented classical music history." />
+    <link rel="stylesheet" href="/src/styles.css?v=woven-about-1" />
   </head>
-  <body>
+  <body class="about-page">
     <main>
-      <a class="back" href="/">← WOVEN</a>
-      <h1>About</h1>
-      <p>WOVEN is a temporal field of relations between artists, works, and recordings in the Classii dataset.</p>
-      <footer>©Iwao KOBAYASHI Classii, 2026</footer>
+      <header class="global-header" aria-label="WOVEN"><a class="global-logo" href="/" aria-label="WOVEN home">WOVEN</a><a class="global-about" href="/about/" aria-current="page">About</a></header>
+      <article class="about-copy">
+        <p class="about-kicker">ABOUT</p>
+        <h1>WOVEN</h1>
+        <p class="about-lead">WOVEN is an interactive data artwork that transforms more than five centuries of documented classical music history into an evolving fabric of light and sound.</p>
+        <p>Music is not created in isolation. Every composition, performance, publication, and recording becomes part of an expanding network of relationships among artists, works, institutions, and audiences. Over centuries, these connections accumulate, overlap, disappear, and re-emerge, forming the cultural fabric through which music is preserved and rediscovered.</p>
+        <p>WOVEN makes this invisible fabric perceptible.</p>
+
+        <h2>A cultural fabric</h2>
+        <p>WOVEN is built upon ClassiiDB, a knowledge infrastructure that connects historical and contemporary music information from multiple open data sources, including MusicBrainz, Wikidata, and RISM.</p>
+        <p>Rather than arranging musical history as a chronological sequence of great composers and masterpieces, WOVEN represents it as a network of documented relationships.</p>
+        <p>Artists are connected through shared compositions, arrangements, performances, recordings, and other musical activities. These relationships are semantically extracted and represented as weighted sparse vectors, allowing the evolving structure of musical history to be explored computationally.</p>
+        <p>The current prototype contains documented events dating from 1513 to 2026, spanning more than five centuries of musical history.</p>
+
+        <h2>Time as weaving</h2>
+        <p>In WOVEN, time becomes a dimension of weaving.</p>
+        <p>Each year contributes another layer to a continuously evolving visual structure. Thousands of artists and hundreds of thousands of documented musical events are transformed into patterns of light, revealing how relationships emerge, accumulate, and change over time.</p>
+        <p>The resulting image resembles a woven textile: individual threads are often indistinguishable, yet together they form intricate structures of density, rhythm, and contrast.</p>
+        <p>Visitors can move through time and focus on individual artists, observing how their musical relationships expand and transform across generations.</p>
+        <p>Following Bach, Beethoven, or Schubert, for example, reveals not only the activities documented during their lifetimes but also the continuing accumulation of performances, recordings, and other connections long after their deaths.</p>
+        <p>A composer's presence in musical history does not end with their lifetime. It continues to evolve through the activities of others.</p>
+
+        <h2>Light and sound</h2>
+        <p>WOVEN translates its underlying vector data into both visual and auditory expressions.</p>
+        <p>The patterns of light and the accompanying sound are generated from the same mathematical representation of musical relationships.</p>
+        <p>Sound is therefore not simply a soundtrack added to the visualization. It is another interpretation of the same underlying structure.</p>
+        <p>Through this correspondence, WOVEN invites visitors to experience musical history not only as information to be understood, but as a structure to be seen and heard.</p>
+
+        <h2>The limits of the archive</h2>
+        <p>WOVEN does not claim to represent the entirety of musical history.</p>
+        <p>Its patterns emerge from surviving, documented, digitized, and interconnected information. The density of the fabric reflects not only musical activity but also the historical circumstances of documentation, preservation, publication, recording, and digitization.</p>
+        <p>Some artists and periods appear richly connected. Others remain faint or almost invisible.</p>
+        <p>The absence of light does not necessarily mean the absence of music. It may reveal the limits of what history has preserved and what our digital archives have made accessible.</p>
+        <p>WOVEN therefore visualizes both the accumulated knowledge of musical culture and the boundaries of that knowledge.</p>
+        <p>As new archives and collections become connected to ClassiiDB, the fabric can be woven again, revealing relationships that were previously invisible.</p>
+
+        <h2>From data to textile</h2>
+        <p>WOVEN is conceived as an artwork that can exist in both digital and physical forms.</p>
+        <p>Its visual structures are inspired by weaving, where complex patterns emerge from the systematic arrangement of individual threads.</p>
+        <p>Future development will explore translating these computational patterns into physical textiles using Jacquard weaving techniques.</p>
+        <p>In this transformation, the mathematical representation of musical relationships becomes a material object: a tangible record of a particular artist, period, or configuration of musical history.</p>
+        <p>The digital visualization and the physical textile are two expressions of the same underlying data.</p>
+
+        <h2>Classii</h2>
+        <p>WOVEN is an artistic exploration developed from <a href="https://classii.mu">Classii</a>, a platform dedicated to connecting and rediscovering classical music knowledge.</p>
+        <p>Classii integrates heterogeneous music information into a connected knowledge infrastructure, enabling relationships among artists, works, recordings, performances, and historical sources to be explored beyond conventional search.</p>
+        <p>WOVEN extends this approach from knowledge discovery into artistic expression, exploring how the accumulated relationships of musical culture can become visible, audible, and eventually tangible.</p>
+        <p>WOVEN is created by Iwao KOBAYASHI, Founder of Classii.</p>
+        <p class="about-classii-link"><a href="https://classii.mu">Explore Classii <span aria-hidden="true">→</span></a></p>
+      </article>
+      <footer class="site-footer"><a class="classii-symbol-link" href="https://classii.mu" aria-label="Visit Classii"><img class="classii-symbol" src="/assets/CL-symbol_b.svg" alt="" /></a><span class="footer-credit">© 2026 Iwao KOBAYASHI · <a href="https://classii.mu">Classii</a></span></footer>
     </main>
   </body>
 </html>

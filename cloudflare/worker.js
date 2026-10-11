@@ -1,4 +1,6 @@
 const DATA_PREFIX = '/public/data/';
+const SAMPLE_KEY = 'woven-sample.json';
+const SAMPLE_PARTS_KEY = 'woven-sample/parts.json';
 
 function contentType(path) {
   if (path.endsWith('.bin')) return 'application/octet-stream';
@@ -11,6 +13,38 @@ export default {
     const url = new URL(request.url);
     if (request.method === 'GET' && url.pathname.startsWith(DATA_PREFIX) && !url.pathname.startsWith('/public/data/artworks/')) {
       const key = url.pathname.slice(DATA_PREFIX.length);
+      if (key === SAMPLE_KEY) {
+        const index = await env.WOVEN_DATA.get(SAMPLE_PARTS_KEY);
+        if (index) {
+          const {parts = []} = await index.json();
+          const objects = await Promise.all(parts.map((part) => env.WOVEN_DATA.get(part)));
+          if (objects.every(Boolean)) {
+            const stream = new ReadableStream({
+              async start(controller) {
+                try {
+                  for (const object of objects) {
+                    const reader = object.body.getReader();
+                    while (true) {
+                      const {done, value} = await reader.read();
+                      if (done) break;
+                      controller.enqueue(value);
+                    }
+                  }
+                  controller.close();
+                } catch (error) {
+                  controller.error(error);
+                }
+              },
+            });
+            return new Response(stream, {
+              headers: {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Cache-Control': 'public, max-age=86400, s-maxage=31536000, immutable',
+              },
+            });
+          }
+        }
+      }
       const object = await env.WOVEN_DATA.get(key);
       if (object) {
         return new Response(object.body, {

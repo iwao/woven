@@ -12,3 +12,4 @@ __pycache__/
 public/data/woven-sample.json
 public/data/woven-tiles/
 .woven-assets/
+.wrangler/

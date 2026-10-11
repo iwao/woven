@@ -35,7 +35,9 @@ export default {
       }
     }
     const asset = await env.ASSETS.fetch(request);
-    if (asset.status !== 404 || url.pathname.includes('.')) return asset;
+    // Static Assets redirects unknown extensionless paths to `/`. Treat that
+    // redirect exactly like a miss so artist routes receive the SPA shell.
+    if ((asset.status >= 200 && asset.status < 300) || url.pathname.includes('.')) return asset;
     return env.ASSETS.fetch(new Request(new URL('/index.html', url), request));
   },
 };

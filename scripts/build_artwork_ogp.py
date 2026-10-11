@@ -33,7 +33,7 @@ def esc(value: object) -> str:
 
 
 def route(entry: dict[str, object], year: int) -> str:
-    return "/artists/{}/{}/{}".format(quote(str(entry["classiiId"])), quote(str(entry["slug"])), year)
+    return "/artists/{}/{}".format(quote(str(entry["slug"])), year)
 
 
 def replace_head(index: str, title: str, description: str, canonical: str, image: str) -> str:

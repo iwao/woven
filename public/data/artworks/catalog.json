@@ -1,8 +1,8 @@
 {
   "version": "woven-artwork-catalog-v1",
-  "snapshotId": "classii-3a1d5ce-artist-first-20261005",
+  "snapshotId": "classii-3a1d5ce-artist-first-20261011-rism-source",
   "limit": 100,
-  "routePattern": "/artists/<classii-id>/<slug>/<year>",
+  "routePattern": "/artists/<slug>/<year>",
   "artists": [
     {
       "rank": 81,
@@ -41,14 +41,14 @@
       "defaultYear": 2026
     },
     {
-      "rank": 4,
+      "rank": 5,
       "classiiId": "45068c8d-62c0-41d9-899a-8a66e90a1f8f",
       "slug": "antonio-vivaldi",
       "name": "Antonio Vivaldi",
       "displayName": "Antonio Vivaldi",
       "birthYear": 1678,
-      "weight": 3867.0205,
-      "firstYear": 1713,
+      "weight": 3870.2055,
+      "firstYear": 1700,
       "lastYear": 2021,
       "defaultYear": 2026
     },
@@ -65,13 +65,13 @@
       "defaultYear": 2026
     },
     {
-      "rank": 5,
+      "rank": 4,
       "classiiId": "99fc6cab-747b-4fb6-95d5-a213b7f04ae1",
       "slug": "george-frideric-handel",
       "name": "George Frideric Handel",
       "displayName": "George Frideric Handel",
       "birthYear": 1685,
-      "weight": 3847.0705,
+      "weight": 3872.203,
       "firstYear": 1700,
       "lastYear": 2023,
       "defaultYear": 2026
@@ -83,7 +83,7 @@
       "name": "Johann Sebastian Bach",
       "displayName": "Johann Sebastian Bach",
       "birthYear": 1685,
-      "weight": 13964.47,
+      "weight": 14121.7445,
       "firstYear": 1700,
       "lastYear": 2025,
       "defaultYear": 2026
@@ -143,7 +143,7 @@
       "name": "Franz Schubert",
       "displayName": "Franz Schubert",
       "birthYear": 1797,
-      "weight": 3245.06,
+      "weight": 3246.04,
       "firstYear": 1811,
       "lastYear": 2024,
       "defaultYear": 2026
@@ -191,8 +191,8 @@
       "name": "Felix Mendelssohn",
       "displayName": "Felix Mendelssohn",
       "birthYear": 1809,
-      "weight": 1373.749,
-      "firstYear": 1739,
+      "weight": 1373.099,
+      "firstYear": 1830,
       "lastYear": 2018,
       "defaultYear": 2026
     },
@@ -203,8 +203,8 @@
       "name": "Fryderyk Chopin",
       "displayName": "Frédéric Chopin",
       "birthYear": 1810,
-      "weight": 3136.28,
-      "firstYear": 1800,
+      "weight": 3134.33,
+      "firstYear": 1817,
       "lastYear": 2018,
       "defaultYear": 2026
     },
@@ -587,8 +587,8 @@
       "name": "Carl Orff",
       "displayName": "Carl Orff",
       "birthYear": 1895,
-      "weight": 503.2775,
-      "firstYear": 1300,
+      "weight": 502.6275,
+      "firstYear": 1953,
       "lastYear": 2017,
       "defaultYear": 2026
     },

@@ -88,7 +88,7 @@ def main() -> None:
         "version": "woven-artwork-catalog-v1",
         "snapshotId": source["snapshotId"],
         "limit": args.limit,
-        "routePattern": "/artists/<classii-id>/<slug>/<year>",
+        "routePattern": "/artists/<slug>/<year>",
         "artists": catalogue,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

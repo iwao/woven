@@ -52,7 +52,7 @@ function setPaletteEditorColor(role, value) {
   draw();
 }
 let data, selected = 'all', yearIndex = 0, lodIndex = 0, cameraZoom = 0, cameraPan = {x: 0, y: 0}, dragState, ignoreNextClick = false, sound = false, glowVolume = .5, highlightVolume = .15, clackVolume = .1, bassoVolume = .3, reverbAmount = .6, audio, audioBus, reverbBus, glowBus, highlightBus, clackBus, bassoBus, glowInstrument = 'synth', weaveClackId, selectedLink;
-let artworkCatalog = new Map();
+let artworkCatalog = new Map(), artworkCatalogBySlug = new Map(), tileManifest;
 let relationCache = {key: '', raw: [], works: new Map(), artists: new Map()};
 let tileCache = new Map(), tiles = new Map();
 const compactScaleCache = new WeakMap();
@@ -80,10 +80,14 @@ const GLOW_REFERENCE_SIZE = {width: 1280, height: 620};
 const FABRIC_INSET = 30;
 const instrumentCatalog = new Map(), loadedInstrumentPacks = new Map();
 const waveCatalog = new Map(), weaveClackBuffers = new Map(), weaveClackPromises = new Map();
-const ARTWORK_CATALOG_URL = '/public/data/artworks/catalog.json?v=artist-birth-years-2';
+const ARTWORK_CATALOG_URL = '/public/data/artworks/catalog.json?v=artist-birth-years-3';
 
 function artworkRoute() {
   const parts = location.pathname.split('/').filter(Boolean);
+  if (parts.length === 3 && parts[0] === 'artists') {
+    const [_, slug, year] = parts;
+    if (/^[0-9]+$/.test(year)) return {slug: decodeURIComponent(slug), year: Number(year), source: 'path'};
+  }
   if (parts.length === 4 && parts[0] === 'artists') {
     const [_, classiiId, slug, year] = parts;
     if (/^[0-9]+$/.test(year)) return {classiiId: decodeURIComponent(classiiId), slug: decodeURIComponent(slug), year: Number(year), source: 'path'};
@@ -96,12 +100,12 @@ const requestedArtwork = artworkRoute();
 function artworkUrl(entry, year) {
   const isLocalPreview = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
   if (isLocalPreview) return `/?${new URLSearchParams({artist: entry.classiiId, slug: entry.slug, year: String(year)})}`;
-  return `/artists/${encodeURIComponent(entry.classiiId)}/${encodeURIComponent(entry.slug)}/${year}`;
+  return `/artists/${encodeURIComponent(entry.slug)}/${year}`;
 }
 function updateArtworkMetadata(entry, displayName, year) {
   const title = `WOVEN — ${displayName} · ${year}`;
   const description = `${displayName} · ${year}, a WOVEN artist relation temporal field from the Classii cultural graph.`;
-  const route = `/artists/${encodeURIComponent(entry.classiiId)}/${encodeURIComponent(entry.slug)}/${year}`;
+  const route = `/artists/${encodeURIComponent(entry.slug)}/${year}`;
   const absolute = new URL(route, location.origin).href;
   const image = new URL(`/public/og/artworks/${encodeURIComponent(entry.classiiId)}/${year}.png`, location.origin).href;
   const set = (selector, content) => { const node = document.querySelector(selector); if (node) node.setAttribute('content', content); };
@@ -110,6 +114,28 @@ function updateArtworkMetadata(entry, displayName, year) {
   set('meta[property="og:title"]', title); set('meta[property="og:description"]', description);
   set('meta[property="og:url"]', absolute); set('meta[property="og:image"]', image);
   set('meta[name="twitter:title"]', title); set('meta[name="twitter:description"]', description); set('meta[name="twitter:image"]', image);
+}
+function artworkStatistics(artist, temporalIndex) {
+  const until = data.years[temporalIndex], works = new Set(); let weight = 0;
+  for (const row of artist.series) if (row.year <= until) for (const [work, value] of row.works) { works.add(work); weight += value; }
+  const overlay = artistOverlayLinks(artist.id, temporalIndex);
+  return {works: works.size, relatedArtists: overlay?.artists.size || 0, weight};
+}
+function configureArtworkPanel(entry, artist, displayName, year) {
+  $('#artwork-title').textContent = `WOVEN — ${displayName} · ${year}`;
+  const artistLink = $('#artwork-artist-name'); artistLink.textContent = displayName; artistLink.href = `https://classii.mu/artists/${encodeURIComponent(entry.classiiId)}`;
+  const stamp = tileManifest?.generated_at ? new Date(tileManifest.generated_at).toISOString().slice(0, 10) : '—';
+  $('#artwork-dataset').textContent = `${data.snapshotId} · ${stamp}`;
+  const stats = artworkStatistics(artist, yearIndex), format = new Intl.NumberFormat('en-US', {maximumFractionDigits: 1});
+  $('#artwork-work-vectors').textContent = format.format(stats.works);
+  $('#artwork-related-artists').textContent = format.format(stats.relatedArtists);
+  $('#artwork-vector-weight').textContent = format.format(stats.weight);
+  const dialog = $('#share-dialog'), url = new URL(artworkUrl(entry, year), location.origin).href, text = `WOVEN — ${displayName} · ${year}`;
+  $('#artwork-share').onclick = () => dialog.showModal();
+  $('#share-x').href = `https://x.com/intent/post?${new URLSearchParams({text, url})}`;
+  $('#share-threads').href = `https://www.threads.net/intent/post?${new URLSearchParams({text: `${text} ${url}`})}`;
+  $('#share-facebook').href = `https://www.facebook.com/sharer/sharer.php?${new URLSearchParams({u: url})}`;
+  $('#share-copy').onclick = async () => { try { await navigator.clipboard.writeText(url); $('#share-copy-status').textContent = 'URL copied'; } catch { $('#share-copy-status').textContent = url; } };
 }
 
 function tileKey() { return document.fullscreenElement === canvas.parentElement ? WIDE_OVERVIEW_KEY : LOD_KEYS[0]; }
@@ -750,7 +776,7 @@ function setPalette(id) {
 }
 async function loadTiles() {
   setLoadingStatus('Loading woven tiles');
-  const base = '/public/data/woven-tiles', manifest = await fetch(`${base}/manifest.json?v=${DATASET_VERSION}`).then((response) => response.json());
+  const base = '/public/data/woven-tiles', manifest = await fetch(`${base}/manifest.json?v=${DATASET_VERSION}`).then((response) => response.json()); tileManifest = manifest;
   await Promise.all([...LOD_KEYS, WIDE_OVERVIEW_KEY].flatMap((lod) => ['artist', 'work'].map(async (layer) => {
     const info = manifest.layers[`${lod}/${layer}`], buffer = await fetch(`${base}/${info.artifact}?v=${DATASET_VERSION}`).then((response) => response.arrayBuffer());
     const header = new DataView(buffer, 0, 32), magic = String.fromCharCode(...new Uint8Array(buffer, 0, 4));
@@ -769,8 +795,8 @@ async function configureArtworkRoute() {
   if (!requestedArtwork) return;
   const response = await fetch(ARTWORK_CATALOG_URL);
   if (!response.ok) throw new Error('Unable to load the WOVEN artwork catalogue.');
-  const catalogue = await response.json(); artworkCatalog = new Map(catalogue.artists.map((artist) => [artist.classiiId, artist]));
-  const entry = artworkCatalog.get(requestedArtwork.classiiId);
+  const catalogue = await response.json(); artworkCatalog = new Map(catalogue.artists.map((artist) => [artist.classiiId, artist])); artworkCatalogBySlug = new Map(catalogue.artists.map((artist) => [artist.slug, artist]));
+  const entry = requestedArtwork.classiiId ? artworkCatalog.get(requestedArtwork.classiiId) : artworkCatalogBySlug.get(requestedArtwork.slug);
   if (!entry) throw new Error('This Artist is not in the public WOVEN artwork collection.');
   const artist = data._artistsById.get(entry.classiiId);
   if (!artist) throw new Error('The requested Artist is unavailable in this dataset.');
@@ -779,6 +805,7 @@ async function configureArtworkRoute() {
   clearOverlayCaches(); document.body.classList.add('artwork-route'); setupArtworkPlayback();
   const displayName = entry.displayName || artist.name;
   updateArtworkMetadata(entry, displayName, nearestYear);
+  configureArtworkPanel(entry, artist, displayName, nearestYear);
   const pageTitle = $('#global-page-title');
   pageTitle.textContent = `${displayName} · ${nearestYear}`;
   pageTitle.hidden = false;

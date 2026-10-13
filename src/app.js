@@ -123,9 +123,7 @@ function artworkStatistics(artist, temporalIndex) {
 }
 function configureArtworkPanel(entry, artist, displayName, year) {
   $('#artwork-title').textContent = `WOVEN — ${displayName} · ${year}`;
-  const artistLink = $('#artwork-artist-name'); artistLink.textContent = displayName; artistLink.href = `https://classii.mu/artists/${encodeURIComponent(entry.classiiId)}`;
-  const stamp = tileManifest?.generated_at ? new Date(tileManifest.generated_at).toISOString().slice(0, 10) : '—';
-  $('#artwork-dataset').textContent = `${data.snapshotId} · ${stamp}`;
+  const artistLink = $('#artwork-artist-name'); artistLink.textContent = `Discover ${displayName} on Classii.mu`; artistLink.href = `https://classii.mu/artists/${encodeURIComponent(entry.classiiId)}`;
   const stats = artworkStatistics(artist, yearIndex), format = new Intl.NumberFormat('en-US', {maximumFractionDigits: 1});
   $('#artwork-work-vectors').textContent = format.format(stats.works);
   $('#artwork-related-artists').textContent = format.format(stats.relatedArtists);
@@ -808,8 +806,7 @@ async function configureArtworkRoute() {
   configureArtworkPanel(entry, artist, displayName, nearestYear);
   $('#artwork-plate').hidden = false;
   const pageTitle = $('#global-page-title');
-  pageTitle.textContent = `${displayName} · ${nearestYear}`;
-  pageTitle.hidden = false;
+  pageTitle.hidden = true;
   if (requestedArtwork.source === 'path') {
     const canonical = artworkUrl(entry, nearestYear);
     if (location.pathname !== canonical) history.replaceState({}, '', canonical);

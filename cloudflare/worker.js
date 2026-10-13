@@ -1,5 +1,5 @@
 const DATA_PREFIX = '/public/data/';
-const COMPRESSED_DATA_ENCODINGS = new Map([['woven-sample.json', 'br']]);
+const isBrotliData = (key) => key === 'woven-sample.json' || key.endsWith('.bin');
 
 function contentType(path) {
   if (path.endsWith('.bin')) return 'application/octet-stream';
@@ -17,21 +17,23 @@ export default {
         const headers = {
           'Content-Type': object.httpMetadata?.contentType || contentType(key),
           'ETag': object.httpEtag,
+          'Vary': 'Accept-Encoding',
           // Snapshot-addressed files are immutable; query strings are kept by
           // the client as an extra dataset-version guard.
           'Cache-Control': 'public, max-age=86400, s-maxage=31536000, immutable',
         };
         // R2's binding does not currently surface stored content-encoding in
         // httpMetadata. The runtime ledger is deliberately stored as Brotli.
-        const encoding = COMPRESSED_DATA_ENCODINGS.get(key);
-        if (encoding) headers['Content-Encoding'] = encoding;
+        const isCompressed = isBrotliData(key);
+        if (isCompressed) headers['Content-Encoding'] = 'br';
         else if (object.httpMetadata?.contentEncoding) headers['Content-Encoding'] = object.httpMetadata.contentEncoding;
-        return new Response(object.body, {
+        const response = new Response(object.body, {
           headers,
           // Do not let Cloudflare re-compress a body that was compressed at
           // build time. Without this, a Brotli payload is encoded twice.
-          encodeBody: encoding ? 'manual' : 'automatic',
+          encodeBody: isCompressed ? 'manual' : 'automatic',
         });
+        return response;
       }
     }
     const asset = await env.ASSETS.fetch(request);

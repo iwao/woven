@@ -38,14 +38,15 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[character]));
 }
 
-function rewriteArtworkHead(response, entry, year, origin, snapshotId) {
+function artworkOgpUrl(entry, year, origin, snapshotId) {
+  return `${origin}/og/artists/${encodeURIComponent(entry.slug)}/${year}.png?v=${encodeURIComponent(snapshotId || '1')}&r=${OGP_RENDER_VERSION}`;
+}
+
+function rewriteArtworkHead(response, entry, year, origin, image) {
   const artist = entry.displayName || entry.name;
   const title = `WOVEN — ${artist} · ${year}`;
   const description = `${artist} · ${year}, a WOVEN artist relation temporal field from the Classii cultural graph.`;
   const canonical = `${origin}/artists/${encodeURIComponent(entry.slug)}/${year}`;
-  // One lossless, data-derived card per Artist is intentionally reused across
-  // year variants, keeping social-preview assets bounded to the public set.
-  const image = `${origin}/og/artists/${encodeURIComponent(entry.slug)}/${year}.png?v=${encodeURIComponent(snapshotId || '1')}&r=${OGP_RENDER_VERSION}`;
   const injected = [
     `<link rel="canonical" href="${escapeHtml(canonical)}">`,
   ].join('');
@@ -61,7 +62,9 @@ function rewriteArtworkHead(response, entry, year, origin, snapshotId) {
     .on('meta[name="twitter:image"]', {element(element) { element.setAttribute('content', image); }})
     .on('head', {element(element) { element.append(injected, {html: true}); }});
   const headers = new Headers(response.headers);
-  headers.set('Cache-Control', 'public, max-age=0, s-maxage=86400');
+  // The OGP image may become available just after the first request. Do not
+  // pin the fallback HTML at the edge, so a later crawler retry sees it.
+  headers.set('Cache-Control', 'no-store');
   return new Response(rewriter.transform(response).body, {status: response.status, statusText: response.statusText, headers});
 }
 
@@ -221,6 +224,15 @@ export default {
     if (!artwork || !shell.ok) return shell;
     const catalogue = await getArtworkCatalogue(env, url.origin);
     const entry = catalogue.artists?.find((candidate) => candidate.slug === artwork.slug);
-    return entry ? rewriteArtworkHead(shell, entry, artwork.year, url.origin, catalogue.snapshotId) : shell;
+    if (!entry) return shell;
+    const image = artworkOgpUrl(entry, artwork.year, url.origin, catalogue.snapshotId);
+    const cachedImage = await caches.default.match(new Request(image));
+    // Return a reliable card immediately on a first view, while the exact
+    // canvas preview is rendered in the background for the next request.
+    if (!cachedImage && !url.searchParams.has('ogp')) {
+      ctx.waitUntil(dynamicOgpImage(new Request(image), env, ctx, {slug: entry.slug, year: artwork.year}, url.origin));
+    }
+    const fallback = `${url.origin}/og/woven.png?r=1`;
+    return rewriteArtworkHead(shell, entry, artwork.year, url.origin, cachedImage ? image : fallback);
   },
 };

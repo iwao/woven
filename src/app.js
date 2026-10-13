@@ -130,6 +130,17 @@ function updateArtworkMetadata(entry, displayName, year) {
   set('meta[property="og:title"]', title); set('meta[property="og:description"]', description);
   set('meta[property="og:url"]', absolute); set('meta[property="og:image"]', image);
   set('meta[name="twitter:title"]', title); set('meta[name="twitter:description"]', description); set('meta[name="twitter:image"]', image);
+  // Individual artworks are resolved client-side, after GTM's initial page view.
+  // Send a distinct virtual view once their canonical metadata is available.
+  window.dataLayer = window.dataLayer || [];
+  window.dataLayer.push({
+    event: 'woven_artwork_view',
+    page_title: title,
+    page_location: absolute,
+    page_path: route,
+    artist_name: displayName,
+    artwork_year: String(year),
+  });
 }
 function artworkStatistics(artist, temporalIndex) {
   const until = data.years[temporalIndex], works = new Set(); let weight = 0;

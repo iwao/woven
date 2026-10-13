@@ -103,6 +103,9 @@ function syncMobileArtworkAspect() {
   const width = viewport?.width || window.innerWidth, height = viewport?.height || window.innerHeight;
   document.documentElement.style.setProperty('--mobile-fullscreen-aspect', String(Math.min(1, width / Math.max(1, height))));
   if (requestedArtwork && matchMedia('(max-width:650px)').matches) canvas.parentElement.style.marginInline = 'auto';
+  const caption = $('#canvas-caption');
+  if (caption && !requestedArtwork && matchMedia('(max-width:650px)').matches) { caption.style.alignItems = 'center'; caption.style.textAlign = 'center'; }
+  else if (caption) { caption.style.removeProperty('align-items'); caption.style.removeProperty('text-align'); }
 }
 syncMobileArtworkAspect();
 window.addEventListener('resize', syncMobileArtworkAspect);
@@ -403,8 +406,8 @@ function appendYearPulse(points, pulseCandidates, width, height) {
           const flare = (1 - distance / .035) * opacity, size = (4 + Math.min(7, Math.sqrt(cell.weight) * .9)) * responsiveGlow;
           // Pulses are drawn in a separate additive pass: a broad halo keeps
           // new relations legible over an already bright late-year fabric.
-          points.push(xPosition, cellY, ...paletteColors.accent, .16 * flare, size * 3.4, .92);
-          points.push(xPosition, cellY, ...paletteColors.bright, .98 * flare, size, .12);
+          points.push(xPosition, cellY, ...paletteColors.accent, .12 * flare, size * 2.6, .92);
+          points.push(xPosition, cellY, ...paletteColors.bright, .9 * flare, size, .12);
           // Keep the audible point tied to its rendered location.  The X axis
           // becomes stereo position; lower points feel closer than upper ones.
           pulseCandidates.push({key: `${index}:${layer}:${x}:${cell.y}`, weight: cell.weight, highlighted: highlightedCells?.has(`${x}:${cell.y}`), spatial: {pan: Math.max(-.92, Math.min(.92, xPosition / Math.max(1, width) * 2 - 1)), depth: Math.max(0, Math.min(1, 1 - cellY / Math.max(1, height)))}});

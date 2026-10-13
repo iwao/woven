@@ -1,8 +1,7 @@
 const DATA_PREFIX = '/public/data/';
 const isBrotliData = (key) => key === 'woven-sample.json' || key.endsWith('.bin');
-const OGP_RENDER_VERSION = '2';
+const OGP_RENDER_VERSION = '4';
 let artworkCatalogue;
-let ogpPrimitives;
 
 function contentType(path) {
   if (path.endsWith('.bin')) return 'application/octet-stream';
@@ -17,15 +16,6 @@ async function getArtworkCatalogue(env, origin) {
       .catch(() => ({artists: []}));
   }
   return artworkCatalogue;
-}
-
-async function getOgpPrimitives(env) {
-  if (!ogpPrimitives) {
-    ogpPrimitives = env.WOVEN_DATA.get('artworks/ogp-primitives.json')
-      .then(async (object) => object ? JSON.parse(await object.text()) : {artists: []})
-      .catch(() => ({artists: []}));
-  }
-  return ogpPrimitives;
 }
 
 function artworkRequest(pathname) {
@@ -128,38 +118,6 @@ async function pngFromPixels(width, height, pixels) {
   return output;
 }
 
-async function artworkOgpPng(record, year, primitives) {
-  const width = 1200, height = 630, pixels = new Uint8Array(width * height * 4);
-  for (let offset = 3; offset < pixels.length; offset += 4) pixels[offset] = 255;
-  const bins = new Float64Array(460);
-  for (const [eventYear, works] of record.series || []) {
-    if (eventYear > year) break;
-    for (const [work, weight] of works) bins[Math.min(bins.length - 1, Math.floor(work / Math.max(1, primitives.workCount) * bins.length))] += weight;
-  }
-  const maximum = Math.max(1, ...bins);
-  const gold = [226, 213, 197], glow = [249, 152, 72], highlight = [242, 238, 130];
-  // A subdued two-layer field preserves the canvas composition; the only
-  // high-energy marks are derived from the requested Artist and year below.
-  for (let column = 0; column < 220; column += 1) {
-    const baseX = 46 + column * 5, top = 96 + (column * 17 % 64), lower = 355 + (column * 29 % 55), strength = .035 + (column * 13 % 20) / 1000;
-    for (let y = top; y < 270 + (column * 11 % 100); y += 2) blendPixel(pixels, width, height, baseX, y, gold, strength);
-    for (let y = lower; y < 585 - (column * 7 % 80); y += 2) blendPixel(pixels, width, height, baseX, y, gold, strength * .7);
-  }
-  const x = 600;
-  for (let y = 38; y <= 592; y += 1) blendPixel(pixels, width, height, x, y, gold, .48);
-  for (let y = 38; y <= 592; y += 1) for (let dx = -7; dx <= 7; dx += 1) blendPixel(pixels, width, height, x + dx, y, glow, .025 * (1 - Math.abs(dx) / 8));
-  for (let index = 0; index < bins.length; index += 1) {
-    const weight = bins[index];
-    if (!weight) continue;
-    const y = 56 + index / (bins.length - 1) * 518;
-    const intensity = Math.pow(weight / maximum, .48);
-    const radius = 1 + intensity * 5.4;
-    drawCircle(pixels, width, height, x, y, radius + 12 * intensity, glow, .05 + intensity * .1);
-    drawCircle(pixels, width, height, x, y, radius, highlight, .24 + intensity * .72);
-  }
-  return pngFromPixels(width, height, pixels);
-}
-
 async function siteOgpPng() {
   const width = 1200, height = 630, pixels = new Uint8Array(width * height * 4), vector = [226, 213, 197], glow = [249, 152, 72], highlight = [242, 238, 130];
   for (let offset = 3; offset < pixels.length; offset += 4) pixels[offset] = 255;
@@ -178,14 +136,24 @@ async function siteOgpPng() {
 async function dynamicOgpImage(request, env, ctx, imageRequest, origin) {
   const cached = await caches.default.match(request);
   if (cached) return cached;
-  const primitives = await getOgpPrimitives(env);
-  const record = primitives.artists?.find((candidate) => candidate.slug === imageRequest.slug);
-  if (!record) return new Response('Artwork preview unavailable', {status: 404});
-  const png = await artworkOgpPng(record, imageRequest.year, primitives);
-  const response = new Response(png, {
-    status: 200,
-    headers: {'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=31536000, immutable'},
+  if (!env.BROWSER) return new Response('Artwork preview unavailable', {status: 503});
+  const page = new URL(`/artists/${encodeURIComponent(imageRequest.slug)}/${imageRequest.year}`, origin);
+  page.searchParams.set('ogp', '1');
+  const screenshot = await env.BROWSER.quickAction('screenshot', {
+    url: page.href,
+    viewport: {width: 1200, height: 630, deviceScaleFactor: 1},
+    waitForSelector: {selector: 'html[data-woven-ready="true"]', timeout: 60000},
+    gotoOptions: {waitUntil: 'networkidle2', timeout: 60000},
+    addStyleTag: [{content: `
+      html,body,main { width:1200px!important; height:630px!important; min-height:0!important; margin:0!important; padding:0!important; overflow:hidden!important; background:#000!important; }
+      .loading-screen,.global-header,.control-drawer,.canvas-player,.canvas-year,.canvas-caption,.artwork-plate,footer { display:none!important; }
+      .fabric-stage,.fabric-wrap { width:1200px!important; height:630px!important; margin:0!important; padding:0!important; }
+      #fabric { display:block!important; width:1200px!important; height:630px!important; margin:0!important; }
+    `}],
+    selector: '#fabric',
   });
+  if (!screenshot.ok) return screenshot;
+  const response = new Response(screenshot.body, {status: screenshot.status, headers: {'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=31536000, immutable'}});
   ctx.waitUntil(caches.default.put(request, response.clone()));
   return response;
 }

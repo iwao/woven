@@ -20,22 +20,13 @@ visit is served by the application rather than a filesystem 404.
 
 ## Social previews / OGP
 
-`scripts/build_artwork_ogp.py` exports a compact Artist-vector sidecar from the
-same prepared Artist/Work vectors used by the canvas. The Cloudflare Worker
-uses that sidecar to render a text-free 1200 × 630 PNG only when an individual
-artwork URL is requested, then stores the result in the edge cache. The Worker
-also injects each route's title and canonical URL into the initial HTML
-response.
-
-```sh
-python3 scripts/build_artwork_ogp.py --site-url https://woven.classii.mu --primitives-only
-```
-
-The command writes `public/data/artworks/ogp-primitives.json`. This compact
-sidecar is uploaded directly to R2 by `publish_cloudflare_assets.sh`, not
-committed to Git, and avoids pre-rendering every Artist × year combination.
-The generated PNG does not contain typography; it is a direct rendering of the
-requested Artist's cumulative vector field.
+The Cloudflare Worker injects each artwork route's title, canonical URL and
+OGP metadata into the initial HTML response. When an individual OGP image is
+first requested, Cloudflare Browser Rendering opens that exact artwork route,
+waits for the WebGL canvas to finish, and captures `#fabric` at 1200 × 630.
+The result has no UI or typography and is cached at the edge for subsequent
+requests. This avoids pre-rendering every Artist × year combination while
+keeping the social image identical to the browser artwork.
 
 ## Cloudflare data delivery
 

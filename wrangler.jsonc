@@ -7,6 +7,9 @@
     "directory": "./dist",
     "binding": "ASSETS"
   },
+  "browser": {
+    "binding": "BROWSER"
+  },
   "r2_buckets": [
     {
       "binding": "WOVEN_DATA",

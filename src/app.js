@@ -957,6 +957,7 @@ init().then(async () => {
   setTouchPlayerVisibility(false);
   setLoadingStatus('Ready');
   completeLoading();
+  document.documentElement.dataset.wovenReady = 'true';
   for (const [channel, id] of [['basso', '#basso-volume'], ['highlight', '#highlight-volume']]) {
     const control = $(id); setChannelVolume(channel, Number(control.value));
     control.addEventListener('input', () => setChannelVolume(channel, Number(control.value)));

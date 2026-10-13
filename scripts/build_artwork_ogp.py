@@ -145,6 +145,7 @@ def main() -> None:
     parser.add_argument("--years", choices=("default", "active"), default="default", help="default: one current card per Artist; active: every Artist vector-acquisition year")
     parser.add_argument("--limit", type=int, help="Optional number of catalog Artists to export; useful for preview QA.")
     parser.add_argument("--images-only", action="store_true", help="Write one bounded OGP image per Artist plus the site card; do not create static HTML routes.")
+    parser.add_argument("--primitives-only", action="store_true", help="Write the compact Artist vector sidecar used for on-demand Worker OGP rendering.")
     parser.add_argument("--sample", type=Path, default=SAMPLE)
     parser.add_argument("--catalog", type=Path, default=CATALOG)
     parser.add_argument("--output-root", type=Path, default=ROOT)
@@ -158,6 +159,26 @@ def main() -> None:
     shell = INDEX.read_text(encoding="utf-8")
     artists = {artist["id"]: artist for artist in source["artists"]}
     work_index = {work["id"]: index for index, work in enumerate(source["works"])}
+    if args.primitives_only:
+        records = []
+        for entry in catalog[:args.limit]:
+            artist = artists.get(entry["classiiId"])
+            if not artist:
+                raise RuntimeError(f"catalog Artist is missing from sample: {entry['classiiId']}")
+            records.append({
+                "slug": entry["slug"],
+                "classiiId": entry["classiiId"],
+                "position": int(artist["position"]),
+                "series": [
+                    [int(row["year"]), [[work_index[work_id], round(float(weight), 5)] for work_id, weight in row.get("works") or [] if work_id in work_index]]
+                    for row in artist.get("series") or []
+                ],
+            })
+        output = args.output_root / "public" / "data" / "artworks" / "ogp-primitives.json"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps({"version": 1, "artistCount": len(source["artists"]), "workCount": len(source["works"]), "artists": records}, separators=(",", ":")), encoding="utf-8")
+        print(json.dumps({"artists": len(records), "output": str(output)}, ensure_ascii=False))
+        return
     generated = 0
     if args.images_only:
         rasterize(site_preview_svg(), args.output_root / "public" / "og" / "woven.png")

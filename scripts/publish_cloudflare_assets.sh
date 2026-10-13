@@ -15,6 +15,7 @@ trap 'rm -rf "$parts_dir"' EXIT
 # can initialise.
 brotli --quality="$BROTLI_QUALITY" --stdout "$data/woven-sample.json" > "$parts_dir/woven-sample.json.br"
 npx wrangler r2 object put "$bucket/woven-sample.json" --remote --file="$parts_dir/woven-sample.json.br" --content-type="application/json" --content-encoding="br"
+npx wrangler r2 object put "$bucket/artworks/ogp-primitives.json" --remote --file="$data/artworks/ogp-primitives.json" --content-type="application/json"
 npx wrangler r2 object put "$bucket/woven-tiles/manifest.json" --remote --file="$data/woven-tiles/manifest.json" --content-type="application/json"
 for file in "$data"/woven-tiles/overview_artist.bin "$data"/woven-tiles/overview_work.bin "$data"/woven-tiles/overview-mobile_artist.bin "$data"/woven-tiles/overview-mobile_work.bin "$data"/woven-tiles/overview-wide_artist.bin "$data"/woven-tiles/overview-wide_work.bin; do
   compressed="$parts_dir/$(basename "$file").br"

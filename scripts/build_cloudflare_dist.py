@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-COPY_PATHS = ("index.html", "about", "src", "assets", "public/audio", "public/data/artworks", "public/og")
+COPY_PATHS = ("index.html", "about", "src", "assets", "public/audio", "public/data/artworks")
 
 
 def main() -> None:
@@ -25,6 +25,9 @@ def main() -> None:
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+    # OGP vector primitives are runtime data sent directly to R2, like the
+    # full sample and pixel tiles. The browser never requests this sidecar.
+    (args.output / "public" / "data" / "artworks" / "ogp-primitives.json").unlink(missing_ok=True)
     print(args.output)
 
 

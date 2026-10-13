@@ -70,7 +70,7 @@ def selected_points(artist: dict[str, object], work_index: dict[str, int], year:
     return [(work_index[work_id], weight) for work_id, weight in points.items() if work_id in work_index]
 
 
-def preview_svg(entry: dict[str, object], artist: dict[str, object], work_index: dict[str, int], artist_count: int, work_count: int, year: int) -> str:
+def preview_svg(entry: dict[str, object], artist: dict[str, object], work_index: dict[str, int], artist_count: int, work_count: int, year: int, *, show_year: bool = True) -> str:
     px, py, pw, ph = PLOT
     x = px + pw * int(artist["position"]) / max(1, artist_count - 1)
     points = selected_points(artist, work_index, year)
@@ -87,11 +87,12 @@ def preview_svg(entry: dict[str, object], artist: dict[str, object], work_index:
         dots.append(f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{radius + 9:.2f}" fill="#F99848" fill-opacity=".11"/>')
         dots.append(f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{radius:.2f}" fill="#F2EE82" fill-opacity=".94"/>')
     display_name = str(entry.get("displayName") or entry.get("name"))
+    label = f"{display_name} · {year}" if show_year else display_name
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" viewBox="0 0 {WIDTH} {HEIGHT}">
 <rect width="100%" height="100%" fill="#000000"/>
 <rect x="32" y="30" width="1136" height="570" fill="none" stroke="#44433f" stroke-width="1"/>
 <text x="52" y="78" fill="#E2D5C5" font-family="Arial, Helvetica, sans-serif" font-size="20" letter-spacing="5">WOVEN</text>
-<text x="52" y="122" fill="#F2EE82" font-family="Arial, Helvetica, sans-serif" font-size="32">{esc(display_name)} · {year}</text>
+<text x="52" y="122" fill="#F2EE82" font-family="Arial, Helvetica, sans-serif" font-size="32">{esc(label)}</text>
 <line x1="{x:.2f}" y1="{py}" x2="{x:.2f}" y2="{py + ph}" stroke="#F99848" stroke-opacity=".26" stroke-width="18"/>
 <line x1="{x:.2f}" y1="{py}" x2="{x:.2f}" y2="{py + ph}" stroke="#F2EE82" stroke-opacity=".92" stroke-width="2"/>
 {''.join(dots)}
@@ -171,7 +172,7 @@ def main() -> None:
             description = f"{entry.get('displayName') or entry.get('name')} · {year}, a WOVEN artist relation temporal field from the Classii cultural graph."
             image_path = f"/public/og/artists/{entry['classiiId']}.png" if args.images_only else f"/public/og/artworks/{entry['classiiId']}/{year}.png"
             canonical = f"{site_url}{path}"
-            rasterize(preview_svg(entry, artist, work_index, len(source["artists"]), len(source["works"]), year), args.output_root / image_path.lstrip("/"))
+            rasterize(preview_svg(entry, artist, work_index, len(source["artists"]), len(source["works"]), year, show_year=not args.images_only), args.output_root / image_path.lstrip("/"))
             if args.images_only:
                 generated += 1
                 break

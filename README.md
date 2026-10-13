@@ -28,6 +28,11 @@ The result has no UI or typography and is cached at the edge for subsequent
 requests. This avoids pre-rendering every Artist × year combination while
 keeping the social image identical to the browser artwork.
 
+The top-level card is also captured from the live canvas, but is stored as
+`og/woven-r3.png` in R2. Individual pages use this ready-to-serve image as
+their fallback while their specific canvas capture is generated, so social
+crawlers never need to wait for Browser Rendering.
+
 ## Cloudflare data delivery
 
 The application repository deliberately excludes generated WOVEN runtime data.

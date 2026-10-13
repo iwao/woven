@@ -93,27 +93,12 @@ async function dynamicOgpImage(request, env, ctx, imageRequest, origin) {
   return response;
 }
 
-async function dynamicSiteOgpImage(request, env, ctx, origin) {
+async function dynamicSiteOgpImage(request, env, ctx) {
   const cached = await caches.default.match(request);
   if (cached) return cached;
-  if (!env.BROWSER) return new Response('Site preview unavailable', {status: 503});
-  const page = new URL('/', origin);
-  page.searchParams.set('ogp', '1');
-  const screenshot = await env.BROWSER.quickAction('screenshot', {
-    url: page.href,
-    viewport: {width: 1200, height: 630, deviceScaleFactor: 1},
-    waitForSelector: {selector: 'html[data-woven-ready="true"]', timeout: 60000},
-    gotoOptions: {waitUntil: 'networkidle2', timeout: 60000},
-    addStyleTag: [{content: `
-      html,body,main { width:1200px!important; height:630px!important; min-height:0!important; margin:0!important; padding:0!important; overflow:hidden!important; background:#000!important; }
-      .loading-screen,.global-header,.control-drawer,.canvas-player,.canvas-year,.canvas-caption,.artwork-plate,footer { display:none!important; }
-      .fabric-stage,.fabric-wrap { width:1200px!important; height:630px!important; margin:0!important; padding:0!important; }
-      #fabric { display:block!important; width:1200px!important; height:630px!important; margin:0!important; }
-    `}],
-    selector: '#fabric',
-  });
-  if (!screenshot.ok) return screenshot;
-  const response = new Response(screenshot.body, {status: screenshot.status, headers: {'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=31536000, immutable'}});
+  const image = await env.WOVEN_DATA.get('og/woven-r3.png');
+  if (!image) return new Response('Site preview unavailable', {status: 503});
+  const response = new Response(image.body, {headers: {'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=31536000, immutable'}});
   ctx.waitUntil(caches.default.put(request, response.clone()));
   return response;
 }
@@ -159,7 +144,7 @@ export default {
     }
     if (isGetOrHead && isSiteOgpRequest(url.pathname)) {
       const imageFetch = request.method === 'GET' ? request : new Request(request.url, {headers: request.headers});
-      const response = await dynamicSiteOgpImage(imageFetch, env, ctx, url.origin);
+      const response = await dynamicSiteOgpImage(imageFetch, env, ctx);
       return request.method === 'HEAD' ? new Response(null, {status: response.status, headers: response.headers}) : response;
     }
     const asset = await env.ASSETS.fetch(request);
@@ -181,7 +166,7 @@ export default {
     if (!cachedImage && !url.searchParams.has('ogp')) {
       ctx.waitUntil(dynamicOgpImage(new Request(image), env, ctx, {slug: entry.slug, year: artwork.year}, url.origin));
     }
-    const fallback = `${url.origin}/og/woven.png?r=2`;
+    const fallback = `${url.origin}/og/woven.png?r=3`;
     return rewriteArtworkHead(shell, entry, artwork.year, url.origin, cachedImage ? image : fallback);
   },
 };

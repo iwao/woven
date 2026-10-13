@@ -793,13 +793,22 @@ function toggleControlDrawer() {
   const drawer = $('#control-drawer'), control = $('#drawer-toggle'), open = !drawer.classList.contains('is-open');
   drawer.classList.toggle('is-open', open); control.setAttribute('aria-expanded', String(open));
 }
+function touchSurface() { return matchMedia('(hover: none), (pointer: coarse)').matches; }
+function setTouchPlayerVisibility(visible) {
+  const player = $('.canvas-player'), wrap = canvas.parentElement;
+  if (!player || !touchSurface() || document.fullscreenElement === wrap) return;
+  wrap.classList.toggle('is-player-visible', visible);
+  player.style.opacity = visible ? '1' : '0';
+  player.style.pointerEvents = visible ? 'auto' : 'none';
+  player.style.transform = visible ? 'translate(-50%,0)' : 'translate(-50%,12px)';
+}
 function revealTouchPlayer() {
   const wrap = canvas.parentElement;
-  if (!matchMedia('(hover: none)').matches || document.fullscreenElement === wrap) return;
+  if (!touchSurface() || document.fullscreenElement === wrap) return;
   if (playerChromeTimer) clearTimeout(playerChromeTimer);
-  wrap.classList.add('is-player-visible');
+  setTouchPlayerVisibility(true);
   playerChromeTimer = setTimeout(() => {
-    wrap.classList.remove('is-player-visible');
+    setTouchPlayerVisibility(false);
     playerChromeTimer = undefined;
   }, 2400);
 }
@@ -931,6 +940,7 @@ init().then(async () => {
   // for non-visual controls elsewhere in the app.
   $('#sound').addEventListener('click', () => queueMicrotask(() => setSoundControl(sound)));
   setupArtistSearch();
+  setTouchPlayerVisibility(false);
   setLoadingStatus('Ready');
   completeLoading();
   for (const [channel, id] of [['basso', '#basso-volume'], ['highlight', '#highlight-volume']]) {

@@ -61,7 +61,7 @@ const artistOverlayCache = new Map();
 const overlayPulseCellCache = new Map();
 const overlayRenderCache = new Map();
 const bassoSampleCache = new Map();
-let yearAnimation, animationFrame, fullscreenChromeTimer, loopArtworkYear = false;
+let yearAnimation, animationFrame, fullscreenChromeTimer, playerChromeTimer, loopArtworkYear = false;
 const LOD_KEYS = ['overview'];
 const WIDE_OVERVIEW_KEY = 'overview-wide';
 const DATASET_VERSION = 'artist-first-5000-20261011-rism-source-attestation-4-br2';
@@ -765,6 +765,16 @@ function toggleControlDrawer() {
   const drawer = $('#control-drawer'), control = $('#drawer-toggle'), open = !drawer.classList.contains('is-open');
   drawer.classList.toggle('is-open', open); control.setAttribute('aria-expanded', String(open));
 }
+function revealTouchPlayer() {
+  const wrap = canvas.parentElement;
+  if (!matchMedia('(hover: none)').matches || document.fullscreenElement === wrap) return;
+  if (playerChromeTimer) clearTimeout(playerChromeTimer);
+  wrap.classList.add('is-player-visible');
+  playerChromeTimer = setTimeout(() => {
+    wrap.classList.remove('is-player-visible');
+    playerChromeTimer = undefined;
+  }, 2400);
+}
 function setPalette(id) {
   if (id === 'custom') return;
   paletteId = id; palette = {...(PALETTES[id] || PALETTES['5'])};
@@ -846,6 +856,7 @@ async function setupFeaturedArtistSelector() {
 }
 async function init() { setLoadingStatus('Loading relationship library'); const response = await fetch(`/public/data/woven-sample.json?v=${DATASET_VERSION}`); if (!response.ok) throw new Error(`Unable to load the WOVEN library: HTTP ${response.status}`); data = await response.json(); await loadTiles(); setLoadingStatus('Arranging the cultural fabric'); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'), paletteControl = $('#palette'); setLoadingStatus('Preparing sound and controls'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); setCanvasYearVisibility(true); $('#zoom-value').textContent = zoomLabel(); year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; clearOverlayCaches(); selectedLink = undefined; update(); }); paletteControl.addEventListener('change', () => setPalette(paletteControl.value)); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); $('#canvas-year-toggle').addEventListener('click', toggleCanvasYearVisibility); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setChannelVolume('glow', Number(reverbControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); document.addEventListener('keydown', playbackShortcut); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); setPalette(paletteControl.value); }
 canvas.parentElement.addEventListener('pointermove', revealFullscreenChrome);
+canvas.parentElement.addEventListener('pointerdown', revealTouchPlayer);
 canvas.parentElement.addEventListener('focusin', () => { if (document.fullscreenElement === canvas.parentElement) setFullscreenChromeVisible(true); });
 function setupArtistSearch() {
   const input = $('#artist-search'), results = $('#artist-results'), select = $('#artist'), normalise = (value) => value.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase();

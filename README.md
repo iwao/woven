@@ -38,7 +38,7 @@ the 100 public Artists acquires vectors (rather than only its default year).
 ## Cloudflare data delivery
 
 The application repository deliberately excludes generated WOVEN runtime data.
-`woven-sample.json` and the four final overview tile binaries are deployed
+`woven-sample.json` and the six final overview tile binaries are deployed
 directly to the `woven-data` R2 bucket; the Worker in `cloudflare/worker.js`
 serves them below `/public/data/` with a long edge cache. This keeps GitHub free
 of large dataset history while preserving the existing browser URLs.
@@ -51,8 +51,9 @@ scripts/publish_cloudflare_assets.sh
 npx wrangler deploy
 ```
 
-Only the normal Overview and fullscreen Overview Wide layers are packaged for
-runtime. Older Cluster and Artist tiles remain regenerable local build inputs.
+Normal Overview, portrait Overview Mobile, and fullscreen Overview Wide layers
+are packaged for runtime. Older Cluster and Artist tiles remain regenerable
+local build inputs.
 
 For a local server without route rewrites, the equivalent artwork view can be
 opened with `/?artist=<classii-id>&slug=<slug>&year=<year>`.

@@ -54,7 +54,7 @@ function setPaletteEditorColor(role, value) {
 let data, selected = 'all', yearIndex = 0, lodIndex = 0, cameraZoom = 0, cameraPan = {x: 0, y: 0}, dragState, ignoreNextClick = false, sound = false, glowVolume = .5, highlightVolume = .15, clackVolume = .1, bassoVolume = .3, reverbAmount = .6, audio, audioBus, reverbBus, glowBus, highlightBus, clackBus, bassoBus, glowInstrument = 'synth', weaveClackId, selectedLink;
 let artworkCatalog = new Map(), artworkCatalogBySlug = new Map(), tileManifest;
 let relationCache = {key: '', raw: [], works: new Map(), artists: new Map()};
-let tileCache = new Map(), tiles = new Map();
+let tileCache = new Map(), tiles = new Map(), tileLoads = new Map();
 const compactScaleCache = new WeakMap();
 const yearDeltaCache = new Map();
 const artistOverlayCache = new Map();
@@ -63,8 +63,9 @@ const overlayRenderCache = new Map();
 const bassoSampleCache = new Map();
 let yearAnimation, animationFrame, fullscreenChromeTimer, playerChromeTimer, loopArtworkYear = false;
 const LOD_KEYS = ['overview'];
+const MOBILE_OVERVIEW_KEY = 'overview-mobile';
 const WIDE_OVERVIEW_KEY = 'overview-wide';
-const DATASET_VERSION = 'artist-first-5000-20261011-rism-source-attestation-4-br2';
+const DATASET_VERSION = 'artist-first-5000-20261011-rism-source-attestation-4-mobile1';
 const YEAR_DURATION_AT_1X = 1400;
 const YEAR_ARRIVAL_DURATION = 340;
 const BASSO_X_BANDS = 7;
@@ -136,7 +137,14 @@ function configureArtworkPanel(entry, artist, displayName, year) {
   $('#share-copy').onclick = async () => { try { await navigator.clipboard.writeText(url); $('#share-copy-status').textContent = 'URL copied'; } catch { $('#share-copy-status').textContent = url; } };
 }
 
-function tileKey() { return document.fullscreenElement === canvas.parentElement ? WIDE_OVERVIEW_KEY : LOD_KEYS[0]; }
+function preferredTileKey() {
+  if (document.fullscreenElement === canvas.parentElement) return WIDE_OVERVIEW_KEY;
+  return matchMedia('(max-width: 650px)').matches ? MOBILE_OVERVIEW_KEY : LOD_KEYS[0];
+}
+function tileKey() {
+  const preferred = preferredTileKey();
+  return tiles.has(`${preferred}:artist`) ? preferred : LOD_KEYS[0];
+}
 function tileFor(modeIndex, layer) { return tiles.get(`${tileKey(modeIndex)}:${layer}`); }
 function tileDeltaWeight(tile, cellIndex, until) {
   const start = tile.deltaStart[cellIndex], end = start + tile.deltaCount[cellIndex]; let total = 0;
@@ -737,7 +745,11 @@ function moveDrag(event) { if (!dragState) return; cameraPan.x = dragState.panX 
 function endDrag(event) { if (!dragState) return; const moved = dragState.moved; dragState = undefined; canvas.classList.remove('is-panning'); if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId); if (moved) { ignoreNextClick = true; selectedLink = undefined; } }
 async function toggleFullscreen() {
   if (document.fullscreenElement === canvas.parentElement) await document.exitFullscreen();
-  else await canvas.parentElement.requestFullscreen({navigationUI: 'hide'});
+  else { await loadTileSet(WIDE_OVERVIEW_KEY); await canvas.parentElement.requestFullscreen({navigationUI: 'hide'}); }
+}
+function loadPreferredTiles() {
+  if (!tileManifest) return;
+  loadTileSet(preferredTileKey()).then(draw).catch((error) => console.warn('Unable to load the preferred WOVEN tile set', error));
 }
 function syncFullscreenControl() {
   const active = document.fullscreenElement === canvas.parentElement;
@@ -785,8 +797,16 @@ function setPalette(id) {
 async function loadTiles() {
   setLoadingStatus('Loading woven tiles');
   const base = '/public/data/woven-tiles', manifest = await fetch(`${base}/manifest.json?v=${DATASET_VERSION}`).then((response) => response.json()); tileManifest = manifest;
-  await Promise.all([...LOD_KEYS, WIDE_OVERVIEW_KEY].flatMap((lod) => ['artist', 'work'].map(async (layer) => {
-    const info = manifest.layers[`${lod}/${layer}`], buffer = await fetch(`${base}/${info.artifact}?v=${DATASET_VERSION}`).then((response) => response.arrayBuffer());
+  await loadTileSet(preferredTileKey());
+}
+async function loadTileSet(lod) {
+  if (tiles.has(`${lod}:artist`) && tiles.has(`${lod}:work`)) return;
+  if (tileLoads.has(lod)) return tileLoads.get(lod);
+  const base = '/public/data/woven-tiles';
+  const task = Promise.all(['artist', 'work'].map(async (layer) => {
+    const info = tileManifest.layers[`${lod}/${layer}`];
+    if (!info) throw new Error(`Missing WOVEN tile layer: ${lod}/${layer}`);
+    const buffer = await fetch(`${base}/${info.artifact}?v=${DATASET_VERSION}`).then((response) => response.arrayBuffer());
     const header = new DataView(buffer, 0, 32), magic = String.fromCharCode(...new Uint8Array(buffer, 0, 4));
     if (magic !== 'WVTL' || header.getUint16(4, true) !== 1) throw new Error(`Unsupported WOVEN tile: ${info.artifact}`);
     const width = header.getUint32(8, true), height = header.getUint32(12, true), cellCount = header.getUint32(16, true), deltaCount = header.getUint32(20, true), cellsOffset = header.getUint32(24, true), deltasOffset = header.getUint32(28, true);
@@ -797,7 +817,9 @@ async function loadTiles() {
     const deltaYears = new Uint16Array(deltaCount), deltaWeights = new Float32Array(deltaCount);
     for (let index = 0; index < deltaCount; index += 1) { const offset = deltasOffset + index * deltaBytes; deltaYears[index] = view.getUint16(offset, true); deltaWeights[index] = view.getFloat32(offset + 4, true); }
     tiles.set(`${lod}:${layer}`, {...info, width, height, cellCount, cellX, cellY, deltaStart, deltaCount: deltaCountByCell, deltaYears, deltaWeights});
-  })));
+  }));
+  tileLoads.set(lod, task);
+  try { await task; } finally { tileLoads.delete(lod); }
 }
 async function configureArtworkRoute() {
   if (!requestedArtwork) return;
@@ -856,6 +878,7 @@ async function setupFeaturedArtistSelector() {
 }
 async function init() { setLoadingStatus('Loading relationship library'); const response = await fetch(`/public/data/woven-sample.json?v=${DATASET_VERSION}`); if (!response.ok) throw new Error(`Unable to load the WOVEN library: HTTP ${response.status}`); data = await response.json(); await loadTiles(); setLoadingStatus('Arranging the cultural fabric'); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'), paletteControl = $('#palette'); setLoadingStatus('Preparing sound and controls'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); setCanvasYearVisibility(true); $('#zoom-value').textContent = zoomLabel(); year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; clearOverlayCaches(); selectedLink = undefined; update(); }); paletteControl.addEventListener('change', () => setPalette(paletteControl.value)); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); $('#canvas-year-toggle').addEventListener('click', toggleCanvasYearVisibility); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setChannelVolume('glow', Number(reverbControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); document.addEventListener('keydown', playbackShortcut); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); setPalette(paletteControl.value); }
 canvas.parentElement.addEventListener('pointermove', revealFullscreenChrome);
+window.addEventListener('resize', loadPreferredTiles);
 canvas.parentElement.addEventListener('pointerdown', revealTouchPlayer);
 canvas.parentElement.addEventListener('focusin', () => { if (document.fullscreenElement === canvas.parentElement) setFullscreenChromeVisible(true); });
 function setupArtistSearch() {

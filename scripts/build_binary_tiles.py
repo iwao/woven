@@ -23,7 +23,11 @@ VERSION = 1
 HEADER = struct.Struct("<4sHHIIIIII")
 CELL = struct.Struct("<HHIHH")
 DELTA = struct.Struct("<HHf")
-RUNTIME_LAYERS = ("overview/artist", "overview/work", "overview-wide/artist", "overview-wide/work")
+RUNTIME_LAYERS = (
+    "overview/artist", "overview/work",
+    "overview-mobile/artist", "overview-mobile/work",
+    "overview-wide/artist", "overview-wide/work",
+)
 
 
 def pack_layer(source_directory: Path, output_directory: Path, key: str, info: dict[str, object]) -> dict[str, object]:

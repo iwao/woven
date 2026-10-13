@@ -78,7 +78,7 @@ const DEFAULT_WEAVE_CLACK = '489000__phonosupf__wood-bell.wav';
 // the available drawing surface: otherwise fullscreen spreads the columns out
 // while leaving a fixed-pixel flare too small to read as light.
 const GLOW_REFERENCE_SIZE = {width: 1280, height: 620};
-const FABRIC_INSET = 30;
+function fabricInset(width, height) { return Math.max(16, Math.min(30, Math.round(Math.min(width, height) * .1))); }
 const instrumentCatalog = new Map(), loadedInstrumentPacks = new Map();
 const waveCatalog = new Map(), weaveClackBuffers = new Map(), weaveClackPromises = new Map();
 const ARTWORK_CATALOG_URL = '/public/data/artworks/catalog.json?v=artist-birth-years-3';
@@ -102,6 +102,7 @@ function syncMobileArtworkAspect() {
   const viewport = window.visualViewport;
   const width = viewport?.width || window.innerWidth, height = viewport?.height || window.innerHeight;
   document.documentElement.style.setProperty('--mobile-fullscreen-aspect', String(Math.min(1, width / Math.max(1, height))));
+  if (requestedArtwork && matchMedia('(max-width:650px)').matches) canvas.parentElement.style.marginInline = 'auto';
 }
 syncMobileArtworkAspect();
 window.addEventListener('resize', syncMobileArtworkAspect);
@@ -238,7 +239,7 @@ function prepareLod() {
   data._lodModes = [overview, cluster, data.artists.map((a) => leaves.get(a.id))].map((ids) => { const positions = new Map(); ids.forEach((id, index) => { const descendants = [id]; while (descendants.length) { const node = byId.get(descendants.pop()); if (node.artist) positions.set(node.artist, index); else descendants.push(...node.children); } }); return {nodes: ids.map((id) => byId.get(id)), positions}; });
   data._artistsById = new Map(data.artists.map((artist) => [artist.id, artist])); data._worksById = new Map(data.works.map((work, index) => [work.id, {...work, index}]));
 }
-function geometry(width, height, count) { const artistTop = FABRIC_INSET, artistBottom = Math.max(178, height * .29), workTop = artistBottom + 18, workBottom = height - FABRIC_INSET; return {x: (i) => FABRIC_INSET + (width - FABRIC_INSET * 2) * i / Math.max(1, count - 1), artistY: (i) => artistTop + (artistBottom - artistTop) * i / Math.max(1, data.artists.length - 1), workY: (i) => workTop + (workBottom - workTop) * i / Math.max(1, data.works.length - 1), artistTop, artistBottom, workTop, workBottom}; }
+function geometry(width, height, count) { const inset = fabricInset(width, height), artistTop = inset, artistBottom = Math.max(178, height * .29), workTop = artistBottom + 18, workBottom = height - inset; return {inset, x: (i) => inset + (width - inset * 2) * i / Math.max(1, count - 1), artistY: (i) => artistTop + (artistBottom - artistTop) * i / Math.max(1, data.artists.length - 1), workY: (i) => workTop + (workBottom - workTop) * i / Math.max(1, data.works.length - 1), artistTop, artistBottom, workTop, workBottom}; }
 function point(points, x, y, weight, max, selected, opacity, modeIndex = 2) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(max)), overview = modeIndex === 0, cluster = modeIndex === 1;
   const size = selected ? 6.6 : overview ? Math.min(4.2, 2 + Math.sqrt(weight) * .16) : cluster ? Math.min(4.8, 1.7 + Math.sqrt(weight) * .38) : Math.min(4.2, 1.1 + Math.sqrt(weight) * .44);
@@ -257,7 +258,7 @@ function constrainPan(width = canvas.clientWidth, height = canvas.clientHeight) 
   const scale = cameraScale();
   // Treat the visible matrix as a bounded world with its top-left at (0, 0).
   // Panning is limited so the viewport never exposes beyond its X/Y extent.
-  const bounds = {left: FABRIC_INSET, right: width - FABRIC_INSET, top: FABRIC_INSET, bottom: height - FABRIC_INSET};
+  const inset = fabricInset(width, height), bounds = {left: inset, right: width - inset, top: inset, bottom: height - inset};
   const centerX = width / 2, centerY = height / 2, inverseZoom = 1 - 1 / scale;
   const minX = (centerX - bounds.right) * inverseZoom, maxX = (centerX - bounds.left) * inverseZoom;
   const minY = (centerY - bounds.bottom) * inverseZoom, maxY = (centerY - bounds.top) * inverseZoom;
@@ -269,7 +270,7 @@ function appendLodLayer(points, modeIndex, opacity, width, height, maxWeight, te
   for (const layer of ['artist', 'work']) {
     const tile = tileFor(modeIndex, layer), yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
     const cells = tileLinks(modeIndex, layer, temporalIndex), compact = modeIndex === 0, scale = compact ? compactScale(cells) : maxWeight;
-    for (const cell of cells) point(points, FABRIC_INSET + (width - FABRIC_INSET * 2) * cell.x / Math.max(1, tile.width - 1), yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), cell.weight, scale, false, opacity, modeIndex);
+    for (const cell of cells) point(points, layout.inset + (width - layout.inset * 2) * cell.x / Math.max(1, tile.width - 1), yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), cell.weight, scale, false, opacity, modeIndex);
   }
 }
 function overlayPoint(points, x, y, weight, maxWeight, opacity, modeIndex) {
@@ -353,7 +354,7 @@ function appendArtistOverlay(points, modeIndex, opacity, width, height, maxWeigh
   const drawCells = (layer, folded, reverse) => {
     const {tile, cells} = folded, yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
     for (const cell of cells) {
-      const x = FABRIC_INSET + (width - FABRIC_INSET * 2) * cell.x / Math.max(1, tile.width - 1), y = yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1);
+      const x = layout.inset + (width - layout.inset * 2) * cell.x / Math.max(1, tile.width - 1), y = yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1);
       if (reverse) reverseOverlayPoint(points, x, y, cell.weight, maxWeight, opacity, modeIndex); else overlayPoint(points, x, y, cell.weight, maxWeight, opacity, modeIndex);
     }
   };
@@ -372,7 +373,7 @@ function appendYearArrival(pulses, width, height) {
     for (const layer of ['artist', 'work']) {
       const tile = tileFor(index, layer), yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
       for (const cells of yearDeltaColumns(index, layer, yearAnimation.yearIndex).values()) for (const cell of cells) {
-        const intensity = Math.min(1, Math.log1p(cell.weight) / 2.8), x = FABRIC_INSET + (width - FABRIC_INSET * 2) * cell.x / Math.max(1, tile.width - 1), y = yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), size = (2.5 + Math.min(4.6, Math.sqrt(cell.weight) * .5)) * responsiveGlow;
+        const intensity = Math.min(1, Math.log1p(cell.weight) / 2.8), x = layout.inset + (width - layout.inset * 2) * cell.x / Math.max(1, tile.width - 1), y = yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), size = (2.5 + Math.min(4.6, Math.sqrt(cell.weight) * .5)) * responsiveGlow;
         pulses.push(x, y, ...paletteColors.accent, (.045 + intensity * .07) * flare * opacity, size * 2.6, .94);
         pulses.push(x, y, ...paletteColors.bright, (.07 + intensity * .13) * flare * opacity, size, .52);
       }
@@ -395,7 +396,7 @@ function appendYearPulse(points, pulseCandidates, width, height) {
       for (let x = first; x <= last; x += 1) {
         const columnPhase = (phase - x / Math.max(1, tile.width - 1) * columnDelay) / columnSpan;
         if (columnPhase < 0 || columnPhase > 1) continue;
-        const xPosition = FABRIC_INSET + (width - FABRIC_INSET * 2) * x / Math.max(1, tile.width - 1), beamY = yTop + (yBottom - yTop) * columnPhase;
+        const xPosition = layout.inset + (width - layout.inset * 2) * x / Math.max(1, tile.width - 1), beamY = yTop + (yBottom - yTop) * columnPhase;
         for (const cell of columns.get(x) || []) {
           const cellY = yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), distance = Math.abs(cellY - beamY) / Math.max(1, yBottom - yTop);
           if (distance > .035) continue;
@@ -433,7 +434,7 @@ function details(event) {
   const worldY = (event.clientY - rect.top - rect.height / 2 - cameraPan.y) / viewScale + rect.height / 2;
   const nodes = data._lodModes[lodIndex].nodes;
   const layout = geometry(rect.width, rect.height, nodes.length);
-  const source = Math.max(0, Math.min(nodes.length - 1, Math.round((worldX - FABRIC_INSET) / (rect.width - FABRIC_INSET * 2) * (nodes.length - 1))));
+  const source = Math.max(0, Math.min(nodes.length - 1, Math.round((worldX - layout.inset) / (rect.width - layout.inset * 2) * (nodes.length - 1))));
   const y = worldY; let link, target;
   if (y >= layout.artistTop && y <= layout.artistBottom) {
     const index = Math.max(0, Math.min(data.artists.length - 1, Math.round((y - layout.artistTop) / (layout.artistBottom - layout.artistTop) * (data.artists.length - 1))));

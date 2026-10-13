@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-COPY_PATHS = ("index.html", "about", "src", "assets", "public/audio", "public/data/artworks")
+COPY_PATHS = ("index.html", "about", "src", "assets", "public/audio", "public/data/artworks", "public/og")
 
 
 def main() -> None:

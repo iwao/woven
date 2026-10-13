@@ -123,7 +123,7 @@ function updateArtworkMetadata(entry, displayName, year) {
   const description = `${displayName} · ${year}, a WOVEN artist relation temporal field from the Classii cultural graph.`;
   const route = `/artists/${encodeURIComponent(entry.slug)}/${year}`;
   const absolute = new URL(route, location.origin).href;
-  const image = new URL(`/public/og/artworks/${encodeURIComponent(entry.classiiId)}/${year}.png`, location.origin).href;
+  const image = new URL(`/public/og/artists/${encodeURIComponent(entry.classiiId)}.png`, location.origin).href;
   const set = (selector, content) => { const node = document.querySelector(selector); if (node) node.setAttribute('content', content); };
   document.title = title;
   set('meta[name="description"]', description);

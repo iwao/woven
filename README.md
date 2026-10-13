@@ -20,20 +20,21 @@ visit is served by the application rather than a filesystem 404.
 
 ## Social previews / OGP
 
-`scripts/build_artwork_ogp.py` exports crawlable HTML documents and 1200 × 630
-PNG social-preview images from the same prepared Artist/Work vectors used by the
-canvas. It defaults to the current artwork year for each public Artist, keeping
-the deploy payload bounded while covering the normal individual-artwork links.
+`scripts/build_artwork_ogp.py` exports 1200 × 630 PNG social-preview images
+from the same prepared Artist/Work vectors used by the canvas. The bounded
+production mode emits one card per public Artist plus the site card; the
+Cloudflare Worker injects each route's title, canonical URL, and matching
+Artist card into the initial HTML response.
 
 ```sh
-python3 scripts/build_artwork_ogp.py --site-url https://your-woven-domain.example
+python3 scripts/build_artwork_ogp.py --site-url https://woven.classii.mu --images-only
 ```
 
-The command writes static pages below `artists/<classii-id>/<slug>/<year>/` and
-their PNGs below `public/og/artworks/`. Static pages take precedence over the
-SPA fallback in `public/_redirects`; routes not prerendered remain interactive
-through that fallback. Use `--years active` to export every year in which one of
-the 100 public Artists acquires vectors (rather than only its default year).
+The command writes `public/og/woven.png` and the per-Artist cards below
+`public/og/artists/`. These are generated deployment assets and are excluded
+from Git. The Worker serves route-specific OGP metadata without having to
+pre-render every Artist × year HTML page. Without `--images-only`, the command
+can still export static pages for an archival build.
 
 ## Cloudflare data delivery
 

@@ -99,6 +99,26 @@ def preview_svg(entry: dict[str, object], artist: dict[str, object], work_index:
 </svg>'''
 
 
+def site_preview_svg() -> str:
+    """A compact, tile-like social card for the top and About pages."""
+    threads = []
+    for index in range(104):
+        x = 58 + index * 10.4
+        height = 170 + ((index * 37) % 190)
+        opacity = .16 + ((index * 17) % 38) / 100
+        threads.append(f'<line x1="{x:.1f}" y1="198" x2="{x:.1f}" y2="{198 + height}" stroke="#E2D5C5" stroke-opacity="{opacity:.2f}" stroke-width="2"/>')
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" viewBox="0 0 {WIDTH} {HEIGHT}">
+<rect width="100%" height="100%" fill="#000000"/>
+<rect x="32" y="30" width="1136" height="570" fill="none" stroke="#44433f" stroke-width="1"/>
+<text x="52" y="92" fill="#E2D5C5" font-family="Arial, Helvetica, sans-serif" font-size="34" letter-spacing="9">WOVEN</text>
+<text x="52" y="136" fill="#9D9D9A" font-family="Arial, Helvetica, sans-serif" font-size="16" letter-spacing="2">A TEMPORAL FIELD OF ARTIST RELATIONS</text>
+<line x1="54" y1="198" x2="1146" y2="198" stroke="#F99848" stroke-opacity=".58" stroke-width="3"/>
+{''.join(threads)}
+<line x1="266" y1="198" x2="266" y2="548" stroke="#F2EE82" stroke-opacity=".9" stroke-width="4"/>
+<text x="52" y="576" fill="#9D9D9A" font-family="Arial, Helvetica, sans-serif" font-size="13" letter-spacing="2">CLASSII CULTURAL GRAPH · 1513—2026</text>
+</svg>'''
+
+
 def rasterize(svg: str, destination: Path) -> None:
     if not shutil.which("magick"):
         raise RuntimeError("ImageMagick `magick` is required to create OGP PNGs.")
@@ -123,6 +143,7 @@ def main() -> None:
     parser.add_argument("--site-url", required=True, help="Published site origin, e.g. https://woven.example")
     parser.add_argument("--years", choices=("default", "active"), default="default", help="default: one current card per Artist; active: every Artist vector-acquisition year")
     parser.add_argument("--limit", type=int, help="Optional number of catalog Artists to export; useful for preview QA.")
+    parser.add_argument("--images-only", action="store_true", help="Write one bounded OGP image per Artist plus the site card; do not create static HTML routes.")
     parser.add_argument("--sample", type=Path, default=SAMPLE)
     parser.add_argument("--catalog", type=Path, default=CATALOG)
     parser.add_argument("--output-root", type=Path, default=ROOT)
@@ -137,6 +158,8 @@ def main() -> None:
     artists = {artist["id"]: artist for artist in source["artists"]}
     work_index = {work["id"]: index for index, work in enumerate(source["works"])}
     generated = 0
+    if args.images_only:
+        rasterize(site_preview_svg(), args.output_root / "public" / "og" / "woven.png")
     for entry in catalog[:args.limit]:
         artist = artists.get(entry["classiiId"])
         if not artist:
@@ -146,15 +169,18 @@ def main() -> None:
             path = route(entry, year)
             title = f"WOVEN — {entry.get('displayName') or entry.get('name')} · {year}"
             description = f"{entry.get('displayName') or entry.get('name')} · {year}, a WOVEN artist relation temporal field from the Classii cultural graph."
-            image_path = f"/public/og/artworks/{entry['classiiId']}/{year}.png"
+            image_path = f"/public/og/artists/{entry['classiiId']}.png" if args.images_only else f"/public/og/artworks/{entry['classiiId']}/{year}.png"
             canonical = f"{site_url}{path}"
             rasterize(preview_svg(entry, artist, work_index, len(source["artists"]), len(source["works"]), year), args.output_root / image_path.lstrip("/"))
+            if args.images_only:
+                generated += 1
+                break
             page = replace_head(shell, title, description, canonical, f"{site_url}{image_path}")
             page_file = args.output_root / path.lstrip("/") / "index.html"
             page_file.parent.mkdir(parents=True, exist_ok=True)
             page_file.write_text(page, encoding="utf-8")
             generated += 1
-    print(json.dumps({"pages": generated, "years": args.years, "siteUrl": site_url}, ensure_ascii=False))
+    print(json.dumps({"images" if args.images_only else "pages": generated, "years": args.years, "siteUrl": site_url}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

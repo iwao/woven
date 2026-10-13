@@ -1,10 +1,57 @@
 const DATA_PREFIX = '/public/data/';
 const isBrotliData = (key) => key === 'woven-sample.json' || key.endsWith('.bin');
+let artworkCatalogue;
 
 function contentType(path) {
   if (path.endsWith('.bin')) return 'application/octet-stream';
   if (path.endsWith('.json')) return 'application/json; charset=utf-8';
   return 'application/octet-stream';
+}
+
+async function getArtworkCatalogue(env, origin) {
+  if (!artworkCatalogue) {
+    artworkCatalogue = env.ASSETS.fetch(`${origin}/public/data/artworks/catalog.json`)
+      .then((response) => response.ok ? response.json() : {artists: []})
+      .catch(() => ({artists: []}));
+  }
+  return artworkCatalogue;
+}
+
+function artworkRequest(pathname) {
+  const parts = pathname.split('/').filter(Boolean);
+  if (parts.length !== 3 || parts[0] !== 'artists' || !/^\d{1,4}$/.test(parts[2])) return;
+  return {slug: decodeURIComponent(parts[1]), year: Number(parts[2])};
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (character) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[character]));
+}
+
+function rewriteArtworkHead(response, entry, year, origin) {
+  const artist = entry.displayName || entry.name;
+  const title = `WOVEN — ${artist} · ${year}`;
+  const description = `${artist} · ${year}, a WOVEN artist relation temporal field from the Classii cultural graph.`;
+  const canonical = `${origin}/artists/${encodeURIComponent(entry.slug)}/${year}`;
+  // One lossless, data-derived card per Artist is intentionally reused across
+  // year variants, keeping social-preview assets bounded to the public set.
+  const image = `${origin}/public/og/artists/${encodeURIComponent(entry.classiiId)}.png`;
+  const injected = [
+    `<link rel="canonical" href="${escapeHtml(canonical)}">`,
+  ].join('');
+  const rewriter = new HTMLRewriter()
+    .on('title', {element(element) { element.setInnerContent(title); }})
+    .on('meta[name="description"]', {element(element) { element.setAttribute('content', description); }})
+    .on('meta[property="og:title"]', {element(element) { element.setAttribute('content', title); }})
+    .on('meta[property="og:description"]', {element(element) { element.setAttribute('content', description); }})
+    .on('meta[property="og:url"]', {element(element) { element.setAttribute('content', canonical); }})
+    .on('meta[property="og:image"]', {element(element) { element.setAttribute('content', image); }})
+    .on('meta[name="twitter:title"]', {element(element) { element.setAttribute('content', title); }})
+    .on('meta[name="twitter:description"]', {element(element) { element.setAttribute('content', description); }})
+    .on('meta[name="twitter:image"]', {element(element) { element.setAttribute('content', image); }})
+    .on('head', {element(element) { element.append(injected, {html: true}); }});
+  const headers = new Headers(response.headers);
+  headers.set('Cache-Control', 'public, max-age=0, s-maxage=86400');
+  return new Response(rewriter.transform(response).body, {status: response.status, statusText: response.statusText, headers});
 }
 
 export default {
@@ -42,6 +89,11 @@ export default {
     if ((asset.status >= 200 && asset.status < 300) || url.pathname.includes('.')) return asset;
     // Static Assets canonicalises /index.html to /. Fetch that canonical shell
     // internally while retaining the visitor's /artists/... URL in the browser.
-    return env.ASSETS.fetch(new Request(new URL('/', url), {method: 'GET', headers: request.headers}));
+    const shell = await env.ASSETS.fetch(new Request(new URL('/', url), {method: 'GET', headers: request.headers}));
+    const artwork = artworkRequest(url.pathname);
+    if (!artwork || !shell.ok) return shell;
+    const catalogue = await getArtworkCatalogue(env, url.origin);
+    const entry = catalogue.artists?.find((candidate) => candidate.slug === artwork.slug);
+    return entry ? rewriteArtworkHead(shell, entry, artwork.year, url.origin) : shell;
   },
 };

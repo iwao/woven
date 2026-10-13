@@ -1,0 +1,9 @@
+/* Keep an artwork title on one line whenever the canvas itself has room. */
+@media (min-width:651px) {
+  body.artwork-route .artwork-plate { width:100%; }
+  body.artwork-route .artwork-plate h1 { white-space:nowrap; }
+}
+
+@media (max-width:650px) {
+  body.artwork-route .artwork-plate h1 { white-space:normal; }
+}

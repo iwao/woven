@@ -98,6 +98,14 @@ function artworkRoute() {
   return undefined;
 }
 const requestedArtwork = artworkRoute();
+function syncMobileArtworkAspect() {
+  const viewport = window.visualViewport;
+  const width = viewport?.width || window.innerWidth, height = viewport?.height || window.innerHeight;
+  document.documentElement.style.setProperty('--mobile-fullscreen-aspect', String(Math.min(1, width / Math.max(1, height))));
+}
+syncMobileArtworkAspect();
+window.addEventListener('resize', syncMobileArtworkAspect);
+window.visualViewport?.addEventListener('resize', syncMobileArtworkAspect);
 function artworkUrl(entry, year) {
   const isLocalPreview = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
   if (isLocalPreview) return `/?${new URLSearchParams({artist: entry.classiiId, slug: entry.slug, year: String(year)})}`;

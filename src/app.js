@@ -65,7 +65,7 @@ let yearAnimation, animationFrame, fullscreenChromeTimer, playerChromeTimer, loo
 const LOD_KEYS = ['overview'];
 const MOBILE_OVERVIEW_KEY = 'overview-mobile';
 const WIDE_OVERVIEW_KEY = 'overview-wide';
-const DATASET_VERSION = 'artist-first-5000-20261011-rism-source-attestation-4-mobile1';
+const DATASET_VERSION = 'artist-first-5000-20261011-rism-source-attestation-4-mobile2';
 const YEAR_DURATION_AT_1X = 1400;
 const YEAR_ARRIVAL_DURATION = 340;
 const BASSO_X_BANDS = 7;

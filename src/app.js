@@ -279,13 +279,13 @@ function appendLodLayer(points, modeIndex, opacity, width, height, maxWeight, te
 function overlayPoint(points, x, y, weight, maxWeight, opacity, modeIndex) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(maxWeight));
   const boost = modeIndex === 0 ? 1.62 : modeIndex === 1 ? 1.27 : 1, size = (3.2 + Math.sqrt(weight) * .28) * boost * .84;
-  points.push(x, y, ...paletteColors.outgoing, (.20 + intensity * .14) * opacity, size * 2.75, .94);
+  points.push(x, y, ...paletteColors.outgoing, (.13 + intensity * .09) * opacity, size * 1.75, .94);
   points.push(x, y, ...paletteColors.outgoing, (.58 + intensity * .30) * opacity, size, .22);
 }
 function reverseOverlayPoint(points, x, y, weight, maxWeight, opacity, modeIndex) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(maxWeight));
   const boost = modeIndex === 0 ? 1.35 : modeIndex === 1 ? 1.16 : 1, size = (3.1 + Math.sqrt(weight) * .28) * boost * .84;
-  points.push(x, y, ...paletteColors.incoming, (.19 + intensity * .14) * opacity, size * 2.65, .94);
+  points.push(x, y, ...paletteColors.incoming, (.12 + intensity * .09) * opacity, size * 1.75, .94);
   points.push(x, y, ...paletteColors.incoming, (.56 + intensity * .32) * opacity, size, .22);
 }
 function artistOverlayLinks(artistId, temporalIndex) {

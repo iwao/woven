@@ -232,7 +232,7 @@ export default {
     if (!cachedImage && !url.searchParams.has('ogp')) {
       ctx.waitUntil(dynamicOgpImage(new Request(image), env, ctx, {slug: entry.slug, year: artwork.year}, url.origin));
     }
-    const fallback = `${url.origin}/og/woven.png?r=1`;
+    const fallback = `${url.origin}/og/woven.png?r=2`;
     return rewriteArtworkHead(shell, entry, artwork.year, url.origin, cachedImage ? image : fallback);
   },
 };

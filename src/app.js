@@ -102,7 +102,10 @@ function syncMobileArtworkAspect() {
   const viewport = window.visualViewport;
   const width = viewport?.width || window.innerWidth, height = viewport?.height || window.innerHeight;
   document.documentElement.style.setProperty('--mobile-fullscreen-aspect', String(Math.min(1, width / Math.max(1, height))));
-  if (requestedArtwork && matchMedia('(max-width:650px)').matches) canvas.parentElement.style.marginInline = 'auto';
+  if (requestedArtwork && matchMedia('(max-width:650px)').matches) {
+    canvas.parentElement.style.marginInline = 'auto';
+    canvas.parentElement.style.setProperty('--mobile-canvas-height', `${Math.round(Math.max(380, Math.min(650, height - 280)))}px`);
+  }
   const caption = $('#canvas-caption');
   if (caption && !requestedArtwork && matchMedia('(max-width:650px)').matches) { caption.style.alignItems = 'center'; caption.style.textAlign = 'center'; }
   else if (caption) { caption.style.removeProperty('align-items'); caption.style.removeProperty('text-align'); }

@@ -129,8 +129,12 @@ function configureArtworkPanel(entry, artist, displayName, year) {
   $('#artwork-work-vectors').textContent = format.format(stats.works);
   $('#artwork-related-artists').textContent = format.format(stats.relatedArtists);
   $('#artwork-vector-weight').textContent = format.format(stats.weight);
+  $('#modal-work-vectors').textContent = format.format(stats.works);
+  $('#modal-related-artists').textContent = format.format(stats.relatedArtists);
+  $('#modal-vector-weight').textContent = format.format(stats.weight);
   const dialog = $('#share-dialog'), url = new URL(artworkUrl(entry, year), location.origin).href, text = `WOVEN — ${displayName} · ${year}`;
   $('#artwork-share').onclick = () => dialog.showModal();
+  $('#artwork-stats-toggle').onclick = () => $('#stats-dialog').showModal();
   $('#share-x').href = `https://x.com/intent/post?${new URLSearchParams({text, url})}`;
   $('#share-threads').href = `https://www.threads.net/intent/post?${new URLSearchParams({text: `${text} ${url}`})}`;
   $('#share-facebook').href = `https://www.facebook.com/sharer/sharer.php?${new URLSearchParams({u: url})}`;

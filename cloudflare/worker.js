@@ -1,6 +1,6 @@
 const DATA_PREFIX = '/public/data/';
 const isBrotliData = (key) => key === 'woven-sample.json' || key.endsWith('.bin');
-const OGP_RENDER_VERSION = '4';
+const OGP_RENDER_VERSION = '5';
 let artworkCatalogue;
 
 function contentType(path) {
@@ -169,6 +169,7 @@ async function dynamicSiteOgpImage(request, ctx) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const isGetOrHead = request.method === 'GET' || request.method === 'HEAD';
     if (request.method === 'GET' && url.pathname.startsWith(DATA_PREFIX) && !url.pathname.startsWith('/public/data/artworks/')) {
       const key = url.pathname.slice(DATA_PREFIX.length);
       const object = await env.WOVEN_DATA.get(key);
@@ -196,8 +197,19 @@ export default {
       }
     }
     const imageRequest = ogpImageRequest(url.pathname);
-    if (request.method === 'GET' && imageRequest) return dynamicOgpImage(request, env, ctx, imageRequest, url.origin);
-    if (request.method === 'GET' && isSiteOgpRequest(url.pathname)) return dynamicSiteOgpImage(request, ctx);
+    // Social scrapers commonly issue HEAD before GET. Render/cache using an
+    // equivalent GET request, then return the same image headers without a
+    // body for HEAD so either probe is a successful image response.
+    if (isGetOrHead && imageRequest) {
+      const imageFetch = request.method === 'GET' ? request : new Request(request.url, {headers: request.headers});
+      const response = await dynamicOgpImage(imageFetch, env, ctx, imageRequest, url.origin);
+      return request.method === 'HEAD' ? new Response(null, {status: response.status, headers: response.headers}) : response;
+    }
+    if (isGetOrHead && isSiteOgpRequest(url.pathname)) {
+      const imageFetch = request.method === 'GET' ? request : new Request(request.url, {headers: request.headers});
+      const response = await dynamicSiteOgpImage(imageFetch, ctx);
+      return request.method === 'HEAD' ? new Response(null, {status: response.status, headers: response.headers}) : response;
+    }
     const asset = await env.ASSETS.fetch(request);
     // Static Assets redirects unknown extensionless paths to `/`. Treat that
     // redirect exactly like a miss so artist routes receive the SPA shell.

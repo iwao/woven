@@ -1,7 +1,48 @@
 const DATA_PREFIX = '/public/data/';
-const isBrotliData = (key) => key === 'woven-sample.json' || key.endsWith('.bin');
+const isBrotliData = (key) => key.startsWith('woven-runtime/') || key.endsWith('.bin');
 const OGP_RENDER_VERSION = '5';
 let artworkCatalogue;
+
+// The only inline script is the audited GTM bootstrap snippet in index.html
+// and about/index.html.  Keeping it hash-pinned prevents injected inline
+// scripts while preserving the intentionally installed container.
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  "script-src 'self' 'sha256-/uUWyaFvLb2LiUAoDjiKeh8uLBT5j7TE33+9LzYjJ04=' https://www.googletagmanager.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com data:",
+  "img-src 'self' data: blob: https://www.googletagmanager.com https://www.google-analytics.com",
+  "media-src 'self' blob:",
+  "connect-src 'self' https://www.googletagmanager.com https://www.google-analytics.com https://region1.google-analytics.com",
+  "frame-src https://www.googletagmanager.com",
+  "worker-src 'self' blob:",
+  'upgrade-insecure-requests',
+].join('; ');
+
+function secureResponse(response) {
+  const headers = new Headers(response.headers);
+  headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY);
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  headers.set('Permissions-Policy', 'camera=(), geolocation=(), microphone=(), payment=(), usb=()');
+  headers.set('X-Frame-Options', 'DENY');
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+    // Preserve manually Brotli-compressed R2 bodies as-is.
+    encodeBody: headers.has('Content-Encoding') ? 'manual' : 'automatic',
+  });
+}
+
+function decodePathComponent(value) {
+  try { return decodeURIComponent(value); }
+  catch { return undefined; }
+}
 
 function contentType(path) {
   if (path.endsWith('.bin')) return 'application/octet-stream';
@@ -21,13 +62,17 @@ async function getArtworkCatalogue(env, origin) {
 function artworkRequest(pathname) {
   const parts = pathname.split('/').filter(Boolean);
   if (parts.length !== 3 || parts[0] !== 'artists' || !/^\d{1,4}$/.test(parts[2])) return;
-  return {slug: decodeURIComponent(parts[1]), year: Number(parts[2])};
+  const slug = decodePathComponent(parts[1]);
+  if (!slug) return;
+  return {slug, year: Number(parts[2])};
 }
 
 function ogpImageRequest(pathname) {
   const parts = pathname.split('/').filter(Boolean);
   if (parts.length !== 4 || parts[0] !== 'og' || parts[1] !== 'artists' || !/^\d{1,4}\.png$/.test(parts[3])) return;
-  return {slug: decodeURIComponent(parts[2]), year: Number(parts[3].slice(0, -4))};
+  const slug = decodePathComponent(parts[2]);
+  if (!slug) return;
+  return {slug, year: Number(parts[3].slice(0, -4))};
 }
 
 function isSiteOgpRequest(pathname) {
@@ -40,6 +85,17 @@ function escapeHtml(value) {
 
 function artworkOgpUrl(entry, year, origin, snapshotId) {
   return `${origin}/og/artists/${encodeURIComponent(entry.slug)}/${year}.png?v=${encodeURIComponent(snapshotId || '1')}&r=${OGP_RENDER_VERSION}`;
+}
+
+function artworkYearIsAvailable(entry, year) {
+  return Number.isInteger(year) && year >= entry.firstYear && year <= entry.lastYear;
+}
+
+function ogpCacheRequest(entry, year, origin, snapshotId) {
+  // Never include visitor-controlled query parameters in the cache key.  The
+  // snapshot and renderer revision are the only inputs that may invalidate a
+  // generated image.
+  return new Request(artworkOgpUrl(entry, year, origin, snapshotId));
 }
 
 function rewriteArtworkHead(response, entry, year, origin, image) {
@@ -65,13 +121,13 @@ function rewriteArtworkHead(response, entry, year, origin, image) {
   // The OGP image may become available just after the first request. Do not
   // pin the fallback HTML at the edge, so a later crawler retry sees it.
   headers.set('Cache-Control', 'no-store');
-  return new Response(rewriter.transform(response).body, {status: response.status, statusText: response.statusText, headers});
+  return secureResponse(new Response(rewriter.transform(response).body, {status: response.status, statusText: response.statusText, headers}));
 }
 
 async function dynamicOgpImage(request, env, ctx, imageRequest, origin) {
   const cached = await caches.default.match(request);
-  if (cached) return cached;
-  if (!env.BROWSER) return new Response('Artwork preview unavailable', {status: 503});
+  if (cached) return secureResponse(cached);
+  if (!env.BROWSER) return secureResponse(new Response('Artwork preview unavailable', {status: 503}));
   const page = new URL(`/artists/${encodeURIComponent(imageRequest.slug)}/${imageRequest.year}`, origin);
   page.searchParams.set('ogp', '1');
   const screenshot = await env.BROWSER.quickAction('screenshot', {
@@ -87,20 +143,20 @@ async function dynamicOgpImage(request, env, ctx, imageRequest, origin) {
     `}],
     selector: '#fabric',
   });
-  if (!screenshot.ok) return screenshot;
+  if (!screenshot.ok) return secureResponse(screenshot);
   const response = new Response(screenshot.body, {status: screenshot.status, headers: {'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=31536000, immutable'}});
   ctx.waitUntil(caches.default.put(request, response.clone()));
-  return response;
+  return secureResponse(response);
 }
 
 async function dynamicSiteOgpImage(request, env, ctx) {
   const cached = await caches.default.match(request);
-  if (cached) return cached;
+  if (cached) return secureResponse(cached);
   const image = await env.WOVEN_DATA.get('og/woven-r3.png');
-  if (!image) return new Response('Site preview unavailable', {status: 503});
+  if (!image) return secureResponse(new Response('Site preview unavailable', {status: 503}));
   const response = new Response(image.body, {headers: {'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=31536000, immutable'}});
   ctx.waitUntil(caches.default.put(request, response.clone()));
-  return response;
+  return secureResponse(response);
 }
 
 export default {
@@ -130,7 +186,7 @@ export default {
           // build time. Without this, a Brotli payload is encoded twice.
           encodeBody: isCompressed ? 'manual' : 'automatic',
         });
-        return response;
+        return secureResponse(response);
       }
     }
     const imageRequest = ogpImageRequest(url.pathname);
@@ -138,33 +194,39 @@ export default {
     // equivalent GET request, then return the same image headers without a
     // body for HEAD so either probe is a successful image response.
     if (isGetOrHead && imageRequest) {
-      const imageFetch = request.method === 'GET' ? request : new Request(request.url, {headers: request.headers});
-      const response = await dynamicOgpImage(imageFetch, env, ctx, imageRequest, url.origin);
-      return request.method === 'HEAD' ? new Response(null, {status: response.status, headers: response.headers}) : response;
+      const catalogue = await getArtworkCatalogue(env, url.origin);
+      const entry = catalogue.artists?.find((candidate) => candidate.slug === imageRequest.slug);
+      // Rendering is a paid Browser operation.  Only issue it for a published
+      // artist and a year represented by that artist's artwork range.
+      if (!entry || !artworkYearIsAvailable(entry, imageRequest.year)) return secureResponse(new Response('Artwork preview not found', {status: 404}));
+      const imageFetch = ogpCacheRequest(entry, imageRequest.year, url.origin, catalogue.snapshotId);
+      const response = await dynamicOgpImage(imageFetch, env, ctx, {slug: entry.slug, year: imageRequest.year}, url.origin);
+      return request.method === 'HEAD' ? secureResponse(new Response(null, {status: response.status, headers: response.headers})) : response;
     }
     if (isGetOrHead && isSiteOgpRequest(url.pathname)) {
       const imageFetch = request.method === 'GET' ? request : new Request(request.url, {headers: request.headers});
       const response = await dynamicSiteOgpImage(imageFetch, env, ctx);
-      return request.method === 'HEAD' ? new Response(null, {status: response.status, headers: response.headers}) : response;
+      return request.method === 'HEAD' ? secureResponse(new Response(null, {status: response.status, headers: response.headers})) : response;
     }
     const asset = await env.ASSETS.fetch(request);
     // Static Assets redirects unknown extensionless paths to `/`. Treat that
     // redirect exactly like a miss so artist routes receive the SPA shell.
-    if ((asset.status >= 200 && asset.status < 300) || url.pathname.includes('.')) return asset;
+    if ((asset.status >= 200 && asset.status < 300) || url.pathname.includes('.')) return secureResponse(asset);
     // Static Assets canonicalises /index.html to /. Fetch that canonical shell
     // internally while retaining the visitor's /artists/... URL in the browser.
     const shell = await env.ASSETS.fetch(new Request(new URL('/', url), {method: 'GET', headers: request.headers}));
     const artwork = artworkRequest(url.pathname);
-    if (!artwork || !shell.ok) return shell;
+    if (!artwork || !shell.ok) return secureResponse(shell);
     const catalogue = await getArtworkCatalogue(env, url.origin);
     const entry = catalogue.artists?.find((candidate) => candidate.slug === artwork.slug);
-    if (!entry) return shell;
+    if (!entry || !artworkYearIsAvailable(entry, artwork.year)) return secureResponse(shell);
     const image = artworkOgpUrl(entry, artwork.year, url.origin, catalogue.snapshotId);
-    const cachedImage = await caches.default.match(new Request(image));
+    const imageFetch = ogpCacheRequest(entry, artwork.year, url.origin, catalogue.snapshotId);
+    const cachedImage = await caches.default.match(imageFetch);
     // Return a reliable card immediately on a first view, while the exact
     // canvas preview is rendered in the background for the next request.
     if (!cachedImage && !url.searchParams.has('ogp')) {
-      ctx.waitUntil(dynamicOgpImage(new Request(image), env, ctx, {slug: entry.slug, year: artwork.year}, url.origin));
+      ctx.waitUntil(dynamicOgpImage(imageFetch, env, ctx, {slug: entry.slug, year: artwork.year}, url.origin));
     }
     const fallback = `${url.origin}/og/woven.png?r=3`;
     return rewriteArtworkHead(shell, entry, artwork.year, url.origin, cachedImage ? image : fallback);

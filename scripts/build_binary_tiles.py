@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Pack the runtime WOVEN overview tiles into typed-array binary artifacts.
+"""Pack the runtime WOVEN display-profile tiles into typed-array binaries.
 
 The browser renders only normal Overview and fullscreen Overview Wide.  JSONL
 is useful as an inspectable generation product, but not as a runtime format:
 parsing it creates hundreds of thousands of short-lived JS objects.  This
-exporter keeps JSONL as a local build input and writes the four deployable
-layers as a compact little-endian binary layout.
+exporter keeps JSONL as a local build input and writes the deployable layers
+as a compact little-endian binary layout.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SOURCE_DIRECTORY = ROOT.parent / "woven-data" / "output" / "woven_tiles_artist_first_5000_rism"
+DEFAULT_SOURCE_DIRECTORY = ROOT.parent / "woven-data" / "output" / "artist_lod_tiles_classii_3a1d5ce_display_20261014"
 DEFAULT_OUTPUT_DIRECTORY = ROOT / "public" / "data" / "woven-tiles"
 MAGIC = b"WVTL"
 VERSION = 1
@@ -24,9 +24,10 @@ HEADER = struct.Struct("<4sHHIIIIII")
 CELL = struct.Struct("<HHIHH")
 DELTA = struct.Struct("<HHf")
 RUNTIME_LAYERS = (
+    "overview-portrait/artist", "overview-portrait/work",
     "overview/artist", "overview/work",
-    "overview-mobile/artist", "overview-mobile/work",
     "overview-wide/artist", "overview-wide/work",
+    "overview-ultra/artist", "overview-ultra/work",
 )
 
 

@@ -102,15 +102,18 @@ const ARTWORK_CATALOG_URL = '/public/data/artworks/catalog.json?v=artist-birth-y
 const RUNTIME_INDEX_URL = '/public/data/woven-runtime/index.json';
 const RUNTIME_ARTIST_BASE_URL = '/public/data/woven-runtime/artists';
 
+function decodeUrlPart(value) { try { return decodeURIComponent(value); } catch { return ''; } }
 function artworkRoute() {
   const parts = location.pathname.split('/').filter(Boolean);
   if (parts.length === 3 && parts[0] === 'artists') {
     const [_, slug, year] = parts;
-    if (/^[0-9]+$/.test(year)) return {slug: decodeURIComponent(slug), year: Number(year), source: 'path'};
+    const decodedSlug = decodeUrlPart(slug);
+    if (decodedSlug && /^[0-9]+$/.test(year)) return {slug: decodedSlug, year: Number(year), source: 'path'};
   }
   if (parts.length === 4 && parts[0] === 'artists') {
     const [_, classiiId, slug, year] = parts;
-    if (/^[0-9]+$/.test(year)) return {classiiId: decodeURIComponent(classiiId), slug: decodeURIComponent(slug), year: Number(year), source: 'path'};
+    const decodedClassiiId = decodeUrlPart(classiiId), decodedSlug = decodeUrlPart(slug);
+    if (decodedClassiiId && decodedSlug && /^[0-9]+$/.test(year)) return {classiiId: decodedClassiiId, slug: decodedSlug, year: Number(year), source: 'path'};
   }
   const query = new URLSearchParams(location.search), classiiId = query.get('artist'), year = query.get('year');
   if (classiiId && year && /^[0-9]+$/.test(year)) return {classiiId, slug: query.get('slug') || '', year: Number(year), source: 'query'};
@@ -619,7 +622,15 @@ function details(event) {
   }
   if (!link) return;
   const node = nodes[source], sourceName = node.artist ? data._artistsById.get(node.artist).name : `${node.leaves} Artists`;
-  detail.innerHTML = `<p class="detail-kicker">${LOD_LABELS[lodIndex].toUpperCase()} ARTIST SOURCE</p><h2>${sourceName} → ${target.name}</h2><p>Relation weight through ${data.years[yearIndex]}: ${link.weight.toFixed(2)}.</p>`;
+  // Artist and work names originate in the dataset.  Build the panel through
+  // text nodes so a malformed upstream value can never become markup here.
+  detail.replaceChildren();
+  const kicker = document.createElement('p'), title = document.createElement('h2'), description = document.createElement('p');
+  kicker.className = 'detail-kicker';
+  kicker.textContent = `${LOD_LABELS[lodIndex].toUpperCase()} ARTIST SOURCE`;
+  title.textContent = `${sourceName} → ${target.name}`;
+  description.textContent = `Relation weight through ${data.years[yearIndex]}: ${link.weight.toFixed(2)}.`;
+  detail.append(kicker, title, description);
   draw();
 }
 function soundContext() {
@@ -1082,7 +1093,7 @@ async function setupFeaturedArtistSelector() {
   control.addEventListener('change', () => { select.value = control.value; select.dispatchEvent(new Event('change')); });
   select.addEventListener('change', () => { control.value = [...control.options].some((option) => option.value === select.value) ? select.value : 'all'; });
 }
-async function init() { setLoadingStatus('Loading relationship library'); const response = await fetch(`/public/data/woven-sample.json?v=${DATASET_VERSION}`); if (!response.ok) throw new Error(`Unable to load the WOVEN library: HTTP ${response.status}`); data = await response.json(); await loadTiles(); setLoadingStatus('Arranging the cultural fabric'); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'), paletteControl = $('#palette'); setLoadingStatus('Preparing sound and controls'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); setCanvasYearVisibility(true); $('#zoom-value').textContent = zoomLabel(); year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; clearOverlayCaches(); selectedLink = undefined; update(); }); paletteControl.addEventListener('change', () => setPalette(paletteControl.value)); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); $('#canvas-year-toggle').addEventListener('click', toggleCanvasYearVisibility); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setChannelVolume('glow', Number(reverbControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); document.addEventListener('keydown', playbackShortcut); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); setPalette(paletteControl.value); }
+async function init(runtimeIndex) { setLoadingStatus('Loading relationship library'); data = runtimeIndex; await loadTiles(); setLoadingStatus('Arranging the cultural fabric'); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'), paletteControl = $('#palette'); setLoadingStatus('Preparing sound and controls'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); setCanvasYearVisibility(true); $('#zoom-value').textContent = zoomLabel(); year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; clearOverlayCaches(); selectedLink = undefined; update(); }); paletteControl.addEventListener('change', () => setPalette(paletteControl.value)); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); $('#canvas-year-toggle').addEventListener('click', toggleCanvasYearVisibility); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setChannelVolume('glow', Number(reverbControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); document.addEventListener('keydown', playbackShortcut); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); setPalette(paletteControl.value); }
 canvas.parentElement.addEventListener('pointermove', revealFullscreenChrome);
 window.addEventListener('resize', loadPreferredTiles);
 // The canvas can change size without a viewport resize (for example when a
@@ -1110,13 +1121,7 @@ async function initRuntime() {
   const response = await fetch(`${RUNTIME_INDEX_URL}?v=${DATASET_VERSION}`);
   if (!response.ok) throw new Error(`Unable to load the WOVEN index: HTTP ${response.status}`);
   const index = await response.json();
-  // Reuse the established control/audio setup. During that setup, substitute
-  // the old monolithic request with the compact runtime index exactly once.
-  const nativeFetch = window.fetch.bind(window);
-  window.fetch = (input, options) => String(input).includes('/public/data/woven-sample.json')
-    ? Promise.resolve(new Response(JSON.stringify(index), {headers: {'Content-Type': 'application/json'}}))
-    : nativeFetch(input, options);
-  try { await init(); } finally { window.fetch = nativeFetch; }
+  await init(index);
 }
 initRuntime().then(async () => {
   await configureArtworkRoute();

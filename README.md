@@ -36,10 +36,11 @@ crawlers never need to wait for Browser Rendering.
 ## Cloudflare data delivery
 
 The application repository deliberately excludes generated WOVEN runtime data.
-`woven-sample.json` and the six final overview tile binaries are deployed
-directly to the `woven-data` R2 bucket; the Worker in `cloudflare/worker.js`
-serves them below `/public/data/` with a long edge cache. This keeps GitHub free
-of large dataset history while preserving the existing browser URLs.
+The runtime index, lazy Artist-detail shards, and final display-profile tile
+binaries are deployed directly to the `woven-data` R2 bucket. The Worker in
+`cloudflare/worker.js` serves them below `/public/data/` with a long edge cache.
+The Parquet ledger and JSONL tile cells remain local generation artifacts; Git
+contains only code, the small artwork catalogue, and application assets.
 
 ```sh
 python3 scripts/build_binary_tiles.py
@@ -49,37 +50,30 @@ scripts/publish_cloudflare_assets.sh
 npx wrangler deploy
 ```
 
-Normal Overview, portrait Overview Mobile, and fullscreen Overview Wide layers
-are packaged for runtime. Older Cluster and Artist tiles remain regenerable
-local build inputs.
+Portrait, normal, wide, and ultra display profiles are packaged for runtime.
+They retain the same full semantic field and are selected from the actual
+canvas dimensions and device-pixel ratio; they are not semantic-zoom levels.
+
+### Compression policy
+
+`publish_cloudflare_assets.sh` uploads the runtime data as Brotli-encoded R2
+objects. Its default is Brotli quality **11**: the current four tile profiles
+shrink from 63.49 MB at quality 6 to 47.09 MB at quality 11 (about 26%). This
+takes about six minutes on the local build machine, which is appropriate for
+infrequent dataset releases and avoids repeating that transfer cost for every
+viewer. For a quick local publication only, override it explicitly:
+
+```sh
+WOVEN_BROTLI_QUALITY=6 scripts/publish_cloudflare_assets.sh
+```
 
 For a local server without route rewrites, the equivalent artwork view can be
 opened with `/?artist=<classii-id>&slug=<slug>&year=<year>`.
 
-## Sample prototype
+## Current generation contract
 
-Build the compact browser asset and sparse LOD pixel tiles after generating the
-WOVEN sample outputs:
-
-```sh
-python3 scripts/import_sample_assets.py --suffix artist_first_1000_artists
-python3 ../woven-data/src/build_artist_lod_pixel_tiles.py \
-  --relations ../woven-data/output/artist_work_relations_artist_first_1000_artists.jsonl \
-  --artist-order ../woven-data/output/artist_dimension_order_artist_first_1000_artists.jsonl \
-  --artist-tree ../woven-data/output/artist_lod_tree_artist_first_1000_artists.jsonl \
-  --vectors ../woven-data/output/artist_year_vectors_artist_first_1000_artists.jsonl \
-  --output-dir public/data/woven-tiles \
-  --snapshot-id classii-3a1d5ce-artist-first-20261005
-python3 -m http.server 4173 --bind 127.0.0.1
-```
-
-Open `http://localhost:4173`. The X axis is the complete Artist population and
-semantic zoom switches it between overview clusters, intermediate clusters, and
-individual Artists. The Y axis has two non-compressed entity layers:
-Work-mediated related Artists and individual Works. In the all-Artist view, each
-LOD layer is rendered from a corresponding sparse pixel matrix. Each pixel stores
-temporal deltas, so the year control accumulates it without rebuilding the
-complete relation graph. Density comes from the growing cross count, while
-relation weight is encoded by gold brightness. Choosing an Artist switches to its
-precise entity-level relations for focus and inspection,
-and offers an opt-in Web Audio beat.
+The browser consumes no monolithic sample payload. `package_woven_runtime_shards.py`
+emits `public/data/woven-runtime/index.json` plus lazy Artist shards, and
+`build_binary_tiles.py` converts the four display-profile JSONL tile layers into
+typed-array binaries. The display source is derived from the canonical Parquet
+ledger in `woven-data/output/event_ledger_<snapshot>/`.

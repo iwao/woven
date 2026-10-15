@@ -9,8 +9,6 @@ __pycache__/
 *.pyc
 
 # Generated runtime data is deployed directly to Cloudflare R2, never Git.
-public/data/woven-sample.json
 public/data/woven-tiles/
-public/og/
 .woven-assets/
 .wrangler/

@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "public" / "data" / "woven-sample.json"
+SOURCE = ROOT / "public" / "data" / "woven-runtime" / "index.json"
 OUTPUT = ROOT / "public" / "data" / "artworks" / "catalog.json"
 
 # The WOVEN source preserves its relation-facing Artist names. Public display
@@ -57,11 +57,18 @@ def main() -> None:
         parser.error(f"missing authoritative Artist JSONL: {args.artist_metadata}")
     metadata = artist_metadata(args.artist_metadata)
     years = [int(year) for year in source["years"]]
-    artists = sorted(source["artists"], key=lambda artist: (-float(artist["weight"]), artist["name"].casefold(), artist["id"]))[:args.limit]
+    source_artists = source["artists"]
+    by_id = {str(artist["id"]): artist for artist in source_artists}
+    featured_ids = [str(artist_id) for artist_id in source.get("featuredArtistIds") or []]
+    artists = [by_id[artist_id] for artist_id in featured_ids[:args.limit] if artist_id in by_id]
+    if not artists:
+        parser.error("runtime index has no featured Artists; generate runtime shards before the artwork catalogue")
     used: set[str] = set()
     catalogue = []
     for rank, artist in enumerate(artists, start=1):
-        series = artist.get("series") or []
+        detail_path = args.source.parent / "artists" / f"{artist['id']}.json"
+        detail = json.loads(detail_path.read_text(encoding="utf-8")) if detail_path.exists() else {}
+        series = detail.get("series") or artist.get("series") or []
         artist_id = str(artist["id"])
         metadata_row = metadata.get(artist_id)
         if not metadata_row:
@@ -79,8 +86,8 @@ def main() -> None:
             "displayName": display_name,
             "birthYear": birth_year,
             "weight": round(float(artist["weight"]), 6),
-            "firstYear": min((int(row["year"]) for row in series), default=None),
-            "lastYear": max((int(row["year"]) for row in series), default=None),
+            "firstYear": min((int(row[0] if isinstance(row, list) else row["year"]) for row in series), default=None),
+            "lastYear": max((int(row[0] if isinstance(row, list) else row["year"]) for row in series), default=None),
             "defaultYear": years[-1],
         })
     catalogue.sort(key=lambda artist: (artist["birthYear"], artist["displayName"].casefold(), artist["classiiId"]))

@@ -55,17 +55,34 @@ let data, selected = 'all', yearIndex = 0, lodIndex = 0, cameraZoom = 0, cameraP
 let artworkCatalog = new Map(), artworkCatalogBySlug = new Map(), tileManifest;
 let relationCache = {key: '', raw: [], works: new Map(), artists: new Map()};
 let tileCache = new Map(), tiles = new Map(), tileLoads = new Map();
+let aggregateWasm;
 const compactScaleCache = new WeakMap();
 const yearDeltaCache = new Map();
+const yearArrivalCache = new Map();
 const artistOverlayCache = new Map();
 const overlayPulseCellCache = new Map();
 const overlayRenderCache = new Map();
 const bassoSampleCache = new Map();
-let yearAnimation, animationFrame, fullscreenChromeTimer, playerChromeTimer, loopArtworkYear = false;
+let yearAnimation, animationFrame, fullscreenChromeTimer, playerChromeTimer, loopArtworkYear = false, tilePrefetchHandle, tilePrefetchQueue = [];
 const LOD_KEYS = ['overview'];
-const MOBILE_OVERVIEW_KEY = 'overview-mobile';
+const PORTRAIT_OVERVIEW_KEY = 'overview-portrait';
 const WIDE_OVERVIEW_KEY = 'overview-wide';
-const DATASET_VERSION = 'artist-first-5000-20261011-rism-source-attestation-4-mobile2';
+const ULTRA_OVERVIEW_KEY = 'overview-ultra';
+const MAX_TILE_PIXEL_RATIO = 1.5;
+// A tile can contain several million occupied cells.  That is useful as a
+// source representation, but submitting all of them every animation frame is
+// needlessly expensive: neighbouring cells resolve to the same few screen
+// pixels.  Keep the source-resolution files, then fold them into a bounded
+// draw budget on the client.
+const MAX_DRAW_CELLS = matchMedia('(max-width:650px)').matches ? 120000 : 300000;
+const TILE_CACHE_LIMIT = 8;
+const YEAR_DELTA_CACHE_LIMIT = 4;
+const YEAR_ARRIVAL_CELL_LIMIT = matchMedia('(max-width:650px)').matches ? 4500 : 12000;
+const MAX_CANVAS_PIXEL_RATIO = 1.5;
+// The browser field deliberately omits zero-event Artists from its display
+// coordinate system.  The complete Classii ledger remains in DuckDB/Parquet;
+// this version names the compact, event-bearing projection used by WebGL.
+const DATASET_VERSION = 'artist-first-display-20261014-v1';
 const YEAR_DURATION_AT_1X = 1400;
 const YEAR_ARRIVAL_DURATION = 340;
 const BASSO_X_BANDS = 7;
@@ -82,6 +99,8 @@ function fabricInset(width, height) { return Math.max(16, Math.min(30, Math.roun
 const instrumentCatalog = new Map(), loadedInstrumentPacks = new Map();
 const waveCatalog = new Map(), weaveClackBuffers = new Map(), weaveClackPromises = new Map();
 const ARTWORK_CATALOG_URL = '/public/data/artworks/catalog.json?v=artist-birth-years-3';
+const RUNTIME_INDEX_URL = '/public/data/woven-runtime/index.json';
+const RUNTIME_ARTIST_BASE_URL = '/public/data/woven-runtime/artists';
 
 function artworkRoute() {
   const parts = location.pathname.split('/').filter(Boolean);
@@ -148,6 +167,20 @@ function artworkStatistics(artist, temporalIndex) {
   const overlay = artistOverlayLinks(artist.id, temporalIndex);
   return {works: works.size, relatedArtists: overlay?.artists.size || 0, weight};
 }
+async function ensureArtistDetail(artistId) {
+  const artist = data._artistsById.get(artistId);
+  if (!artist || artist.series) return artist;
+  if (!artist.detailAvailable) throw new Error('This Artist is not yet available as a WOVEN artwork.');
+  const response = await fetch(`${RUNTIME_ARTIST_BASE_URL}/${encodeURIComponent(artistId)}.json?v=${DATASET_VERSION}`);
+  if (!response.ok) throw new Error(`Unable to load Artist detail: HTTP ${response.status}`);
+  const detail = await response.json();
+  artist.series = (detail.series || []).map(([year, delta, cumulative, activeWorks, works]) => ({year, delta, cumulative, activeWorks, works}));
+  for (const row of artist.series) for (const [position] of row.works) data._worksById.set(String(position), {id: String(position), index: position});
+  artist.relatedArtistDeltas = detail.relatedArtistDeltas || [];
+  artist.incomingWorkDeltas = detail.incomingWorkDeltas || [];
+  clearOverlayCaches();
+  return artist;
+}
 function configureArtworkPanel(entry, artist, displayName, year) {
   $('#artwork-title').textContent = `WOVEN — ${displayName} · ${year}`;
   const artistLink = $('#artwork-artist-name'); artistLink.textContent = `Discover ${displayName} on Classii.mu`; artistLink.href = `https://classii.mu/artists/${encodeURIComponent(entry.classiiId)}`;
@@ -167,15 +200,36 @@ function configureArtworkPanel(entry, artist, displayName, year) {
   $('#share-copy').onclick = async () => { try { await navigator.clipboard.writeText(url); $('#share-copy-status').textContent = 'URL copied'; } catch { $('#share-copy-status').textContent = url; } };
 }
 
+function tileDemand() {
+  const width = Math.max(1, canvas.clientWidth), height = Math.max(1, canvas.clientHeight);
+  const pixelRatio = Math.min(MAX_TILE_PIXEL_RATIO, Math.max(1, window.devicePixelRatio || 1));
+  const layout = geometry(width, height, data?._artistsById?.size || 1);
+  return {
+    width: Math.ceil(width * pixelRatio),
+    artistHeight: Math.ceil((layout.artistBottom - layout.artistTop) * pixelRatio),
+    workHeight: Math.ceil((layout.workBottom - layout.workTop) * pixelRatio),
+    portrait: height / width > 1.2,
+  };
+}
+function profileFits(key, demand) {
+  const artist = tileManifest?.layers?.[`${key}/artist`], work = tileManifest?.layers?.[`${key}/work`];
+  return Boolean(artist && work && artist.width >= demand.width && artist.height >= demand.artistHeight && work.height >= demand.workHeight);
+}
 function preferredTileKey() {
-  if (document.fullscreenElement === canvas.parentElement) return WIDE_OVERVIEW_KEY;
-  return matchMedia('(max-width: 650px)').matches ? MOBILE_OVERVIEW_KEY : LOD_KEYS[0];
+  if (!tileManifest) return LOD_KEYS[0];
+  const demand = tileDemand();
+  // Portrait is intentionally considered first: it reserves rows for the
+  // tall Work field rather than selecting a landscape-oriented matrix only
+  // because its X size happens to be sufficient.
+  if (demand.portrait && profileFits(PORTRAIT_OVERVIEW_KEY, demand)) return PORTRAIT_OVERVIEW_KEY;
+  for (const key of [LOD_KEYS[0], WIDE_OVERVIEW_KEY, ULTRA_OVERVIEW_KEY]) if (profileFits(key, demand)) return key;
+  return tileManifest.layers[`${ULTRA_OVERVIEW_KEY}/artist`] ? ULTRA_OVERVIEW_KEY : LOD_KEYS[0];
 }
 function tileKey() {
   const preferred = preferredTileKey();
   return tiles.has(`${preferred}:artist`) ? preferred : LOD_KEYS[0];
 }
-function tileFor(modeIndex, layer) { return tiles.get(`${tileKey(modeIndex)}:${layer}`); }
+function tileFor(modeIndex, layer) { return tiles.get(`${tileKey(modeIndex)}:${layer}`) || tiles.get(`overview:${layer}`); }
 function tileDeltaWeight(tile, cellIndex, until) {
   const start = tile.deltaStart[cellIndex], end = start + tile.deltaCount[cellIndex]; let total = 0;
   for (let offset = start; offset < end; offset += 1) if (tile.deltaYears[offset] <= until) total += tile.deltaWeights[offset];
@@ -191,18 +245,87 @@ function visibleArtists() { return data.artists; }
 function rememberBounded(map, key, value, limit) { if (map.has(key)) map.delete(key); map.set(key, value); while (map.size > limit) map.delete(map.keys().next().value); return value; }
 function clearOverlayCaches() { artistOverlayCache.clear(); overlayPulseCellCache.clear(); overlayRenderCache.clear(); }
 function cache() { const key = `${yearIndex}`; if (relationCache.key !== key) relationCache = {key, raw: null, works: new Map(), artists: new Map()}; return relationCache; }
+function alignedOffset(value, alignment = 8) { return Math.ceil(value / alignment) * alignment; }
+function growWasmMemory(bytes) {
+  const memory = aggregateWasm.memory, current = memory.buffer.byteLength;
+  if (current < bytes) memory.grow(Math.ceil((bytes - current) / 65536));
+  return memory.buffer;
+}
+function wasmTileLinks(tile, until, factor) {
+  if (!aggregateWasm) return undefined;
+  const base = Number(aggregateWasm.__heap_base?.value || aggregateWasm.__heap_base || 0);
+  const bucketWidth = Math.ceil(tile.width / factor), bucketHeight = Math.ceil(tile.height / factor), bucketCount = bucketWidth * bucketHeight;
+  let offset = alignedOffset(base);
+  const claim = (bytes, alignment = 4) => { offset = alignedOffset(offset, alignment); const start = offset; offset += bytes; return start; };
+  const xOffset = claim(tile.cellX.byteLength, 2), yOffset = claim(tile.cellY.byteLength, 2), startOffset = claim(tile.deltaStart.byteLength), countOffset = claim(tile.deltaCount.byteLength, 2), yearsOffset = claim(tile.deltaYears.byteLength, 2), weightsOffset = claim(tile.deltaWeights.byteLength), bucketsOffset = claim(bucketCount * 4), outputOffset = claim(bucketCount * 12);
+  const buffer = growWasmMemory(offset);
+  new Uint16Array(buffer, xOffset, tile.cellX.length).set(tile.cellX); new Uint16Array(buffer, yOffset, tile.cellY.length).set(tile.cellY);
+  new Uint32Array(buffer, startOffset, tile.deltaStart.length).set(tile.deltaStart); new Uint16Array(buffer, countOffset, tile.deltaCount.length).set(tile.deltaCount);
+  new Uint16Array(buffer, yearsOffset, tile.deltaYears.length).set(tile.deltaYears); new Float32Array(buffer, weightsOffset, tile.deltaWeights.length).set(tile.deltaWeights);
+  const count = aggregateWasm.aggregate(xOffset, yOffset, startOffset, countOffset, yearsOffset, weightsOffset, tile.cellCount, until, factor, tile.width, tile.height, bucketsOffset, bucketWidth, bucketHeight, outputOffset);
+  const values = new Float32Array(buffer, outputOffset, count * 3), result = new Array(count);
+  for (let index = 0, offset = 0; index < count; index += 1, offset += 3) result[index] = {x: values[offset], y: values[offset + 1], weight: values[offset + 2]};
+  return result;
+}
 function rawLinks() { const current = cache(); if (current.raw) return current.raw; const links = new Map(), until = data.years[yearIndex]; for (const artist of visibleArtists()) for (const row of artist.series) { if (row.year > until) continue; for (const [work, value] of row.works) { const key = `${artist.id}:${work}`, old = links.get(key); links.set(key, {artist, work, weight: (old?.weight || 0) + value}); } } return current.raw = [...links.values()]; }
 function workLinks(modeIndex = lodIndex) { const current = cache(); if (current.works.has(modeIndex)) return current.works.get(modeIndex); const links = new Map(), positions = data._lodModes[modeIndex].positions; for (const link of rawLinks()) { const source = positions.get(link.artist.id); if (source === undefined) continue; const key = `${source}:${link.work}`, old = links.get(key); links.set(key, {source, target: link.work, weight: (old?.weight || 0) + link.weight}); } const result = [...links.values()]; current.works.set(modeIndex, result); return result; }
 function artistLinks(modeIndex = lodIndex) { const current = cache(); if (current.artists.has(modeIndex)) return current.artists.get(modeIndex); const links = new Map(), positions = data._lodModes[modeIndex].positions, until = data.years[yearIndex]; for (const relation of data.artistRelations) { if (relation.firstYear === null || relation.firstYear > until) continue; for (const [from, target] of [[relation.source, relation.target], [relation.target, relation.source]]) { const source = positions.get(from); if (source === undefined) continue; const key = `${source}:${target}`, old = links.get(key); links.set(key, {source, target, weight: (old?.weight || 0) + relation.weight, sharedWorks: (old?.sharedWorks || 0) + relation.sharedWorks}); } } const result = [...links.values()]; current.artists.set(modeIndex, result); return result; }
 function tileLinks(modeIndex, layer, temporalIndex = yearIndex) {
   const key = `${temporalIndex}:${tileKey(modeIndex)}:${layer}`, cached = tileCache.get(key); if (cached) return cached;
   const tile = tileFor(modeIndex, layer), until = data.years[temporalIndex];
-  const result = [];
+  // Coalesce at source-grid level rather than sampling. This preserves the
+  // accumulated relation weight and avoids sparse, flickering patterns.
+  const factor = Math.max(1, Math.ceil(Math.sqrt(tile.width * tile.height / MAX_DRAW_CELLS)));
+  const wasmResult = wasmTileLinks(tile, until, factor);
+  if (wasmResult) return rememberBounded(tileCache, key, wasmResult, TILE_CACHE_LIMIT);
+  const buckets = factor > 1 ? new Map() : undefined, result = [];
   for (let index = 0; index < tile.cellCount; index += 1) {
     const weight = tileDeltaWeight(tile, index, until);
-    if (weight > 0) result.push({x: tile.cellX[index], y: tile.cellY[index], weight});
+    if (weight <= 0) continue;
+    if (!buckets) { result.push({x: tile.cellX[index], y: tile.cellY[index], weight}); continue; }
+    const x = Math.floor(tile.cellX[index] / factor), y = Math.floor(tile.cellY[index] / factor), bucketKey = `${x}:${y}`, previous = buckets.get(bucketKey);
+    if (previous) previous.weight += weight;
+    else buckets.set(bucketKey, {x: Math.min(tile.width - 1, x * factor + Math.floor(factor / 2)), y: Math.min(tile.height - 1, y * factor + Math.floor(factor / 2)), weight});
   }
-  tileCache.set(key, result); return result;
+  const compact = buckets ? [...buckets.values()] : result;
+  return rememberBounded(tileCache, key, compact, TILE_CACHE_LIMIT);
+}
+function discardTimelineTiles(beforeYear) {
+  for (const key of tileCache.keys()) {
+    const cachedYear = Number(key.slice(0, key.indexOf(':')));
+    if (Number.isFinite(cachedYear) && cachedYear < beforeYear) tileCache.delete(key);
+  }
+}
+function cancelTilePrefetch() {
+  if (tilePrefetchHandle) {
+    if ('cancelIdleCallback' in window) cancelIdleCallback(tilePrefetchHandle); else clearTimeout(tilePrefetchHandle);
+  }
+  tilePrefetchHandle = undefined; tilePrefetchQueue = [];
+}
+function scheduleTilePrefetch(targetIndex) {
+  if (requestedArtwork || !yearAnimation) return;
+  // The visible transition consumes `yearIndex` and `targetIndex`; warm two
+  // further years while that transition is on screen. Each unit is a single
+  // layer, which keeps a slow device responsive between computations.
+  const horizon = [targetIndex + 1, targetIndex + 2].filter((index) => index < data.years.length);
+  tilePrefetchQueue = horizon.flatMap((index) => ['artist', 'work'].map((layer) => ({index, layer})));
+  discardTimelineTiles(Math.max(0, yearIndex));
+  const run = (deadline) => {
+    tilePrefetchHandle = undefined;
+    if (!yearAnimation || !tilePrefetchQueue.length) return;
+    const item = tilePrefetchQueue.shift();
+    tileLinks(0, item.layer, item.index);
+    // Schedule rather than loop: Wasm aggregation stays off the critical
+    // draw call, and the browser can yield to interaction or the next frame.
+    if (tilePrefetchQueue.length) {
+      tilePrefetchHandle = 'requestIdleCallback' in window
+        ? requestIdleCallback(run, {timeout: 180})
+        : setTimeout(() => run({timeRemaining: () => 0}), 16);
+    }
+  };
+  tilePrefetchHandle = 'requestIdleCallback' in window
+    ? requestIdleCallback(run, {timeout: 120})
+    : setTimeout(() => run({timeRemaining: () => 0}), 16);
 }
 function yearDeltaColumns(modeIndex, layer, index) {
   const key = `${tileKey(modeIndex)}:${layer}:${index}`, cached = yearDeltaCache.get(key); if (cached) return cached;
@@ -214,7 +337,17 @@ function yearDeltaColumns(modeIndex, layer, index) {
     const x = tile.cellX[cellIndex], column = columns.get(x) || [];
     column.push({x, y: tile.cellY[cellIndex], weight: delta}); columns.set(x, column);
   }
-  yearDeltaCache.set(key, columns); return columns;
+  return rememberBounded(yearDeltaCache, key, columns, YEAR_DELTA_CACHE_LIMIT);
+}
+function yearArrivalCells(modeIndex, layer, index) {
+  const key = `${tileKey(modeIndex)}:${layer}:${index}`, cached = yearArrivalCache.get(key); if (cached) return cached;
+  const tile = tileFor(modeIndex, layer), factor = Math.max(1, Math.ceil(Math.sqrt(tile.width * tile.height / YEAR_ARRIVAL_CELL_LIMIT))), buckets = new Map();
+  for (const cells of yearDeltaColumns(modeIndex, layer, index).values()) for (const cell of cells) {
+    const x = Math.floor(cell.x / factor), y = Math.floor(cell.y / factor), bucketKey = `${x}:${y}`, old = buckets.get(bucketKey);
+    if (old) old.weight += cell.weight;
+    else buckets.set(bucketKey, {x: Math.min(tile.width - 1, x * factor + Math.floor(factor / 2)), y: Math.min(tile.height - 1, y * factor + Math.floor(factor / 2)), weight: cell.weight});
+  }
+  return rememberBounded(yearArrivalCache, key, [...buckets.values()], YEAR_DELTA_CACHE_LIMIT);
 }
 function bassoSamples(temporalIndex) {
   const key = `${temporalIndex}`, cached = bassoSampleCache.get(key); if (cached) return cached;
@@ -239,6 +372,14 @@ function compactScale(links) {
 }
 
 function prepareLod() {
+  // Runtime delivery no longer sends a multi-megabyte semantic tree. The
+  // display is permanently Overview, so Artist positions in the small index
+  // are the only mapping the renderer needs.
+  data._artistsById = new Map(data.artists.map((artist) => [artist.id, artist]));
+  data.works = {length: data.workCount};
+  data._worksById = new Map();
+  data._lodModes = [{nodes: [], positions: new Map(data.artists.map((artist) => [artist.id, artist.position]))}];
+  return;
   const byId = new Map(data.lod.tree.map((node) => [node.id, node])), byArtist = new Map(data.artists.map((artist, index) => [artist.id, index])), leaves = new Map(data.lod.tree.filter((node) => node.artist).map((node) => [node.artist, node.id])), minimum = new Map();
   // The production semantic tree can be thousands of levels deep.  Compute
   // leftmost-leaf positions with an explicit post-order traversal rather than
@@ -256,7 +397,7 @@ function prepareLod() {
   data._lodModes = [overview, cluster, data.artists.map((a) => leaves.get(a.id))].map((ids) => { const positions = new Map(); ids.forEach((id, index) => { const descendants = [id]; while (descendants.length) { const node = byId.get(descendants.pop()); if (node.artist) positions.set(node.artist, index); else descendants.push(...node.children); } }); return {nodes: ids.map((id) => byId.get(id)), positions}; });
   data._artistsById = new Map(data.artists.map((artist) => [artist.id, artist])); data._worksById = new Map(data.works.map((work, index) => [work.id, {...work, index}]));
 }
-function geometry(width, height, count) { const inset = fabricInset(width, height), artistTop = inset, artistBottom = Math.max(178, height * .29), workTop = artistBottom, workBottom = height - inset; return {inset, x: (i) => inset + (width - inset * 2) * i / Math.max(1, count - 1), artistY: (i) => artistTop + (artistBottom - artistTop) * i / Math.max(1, data.artists.length - 1), workY: (i) => workTop + (workBottom - workTop) * i / Math.max(1, data.works.length - 1), artistTop, artistBottom, workTop, workBottom}; }
+function geometry(width, height, count) { const inset = fabricInset(width, height), artistTop = inset, artistBottom = Math.max(178, height * .29), workTop = artistBottom, workBottom = height - inset; return {inset, x: (i) => inset + (width - inset * 2) * i / Math.max(1, count - 1), artistY: (i) => artistTop + (artistBottom - artistTop) * i / Math.max(1, data.artists.length - 1), workY: (i) => workTop + (workBottom - workTop) * i / Math.max(1, data.workCount - 1), artistTop, artistBottom, workTop, workBottom}; }
 function point(points, x, y, weight, max, selected, opacity, modeIndex = 2) {
   const intensity = Math.min(1, Math.log1p(weight) / Math.log1p(max)), overview = modeIndex === 0, cluster = modeIndex === 1;
   const size = selected ? 6.6 : overview ? Math.min(4.2, 2 + Math.sqrt(weight) * .16) : cluster ? Math.min(4.8, 1.7 + Math.sqrt(weight) * .38) : Math.min(4.2, 1.1 + Math.sqrt(weight) * .44);
@@ -305,13 +446,19 @@ function reverseOverlayPoint(points, x, y, weight, maxWeight, opacity, modeIndex
 function artistOverlayLinks(artistId, temporalIndex) {
   const key = `${artistId}:${temporalIndex}`, cached = artistOverlayCache.get(key); if (cached) return rememberBounded(artistOverlayCache, key, cached, ARTIST_OVERLAY_CACHE_LIMIT);
   const artist = data._artistsById.get(artistId), until = data.years[temporalIndex], works = new Map(), artists = new Map(), reverseArtists = new Map(), reverseWorks = new Map();
-  if (!artist) return undefined;
+  if (!artist?.series) return undefined;
+  if (artist.relatedArtistDeltas) {
+    for (const row of artist.series) if (row.year <= until) for (const [work, weight] of row.works) works.set(work, (works.get(work) || 0) + weight);
+    for (const [year, position, weight] of artist.relatedArtistDeltas) if (year <= until) artists.set(position, (artists.get(position) || 0) + weight);
+    for (const [year, source, target, weight] of artist.incomingWorkDeltas) if (year <= until) reverseWorks.set(`${source}:${target}`, {source, target, weight: (reverseWorks.get(`${source}:${target}`)?.weight || 0) + weight});
+    return rememberBounded(artistOverlayCache, key, {artist, works, artists, reverseArtists: artists, reverseWorks: [...reverseWorks.values()]}, ARTIST_OVERLAY_CACHE_LIMIT);
+  }
   for (const row of artist.series) if (row.year <= until) for (const [work, weight] of row.works) works.set(work, (works.get(work) || 0) + weight);
   // Every overlay weight uses only the deltas accumulated through `until`.
   // Artist × Artist is the same work-mediated min-weight measure used to
   // build the relation graph, rather than a full-dataset pair total.
   for (const candidate of data.artists) {
-    if (candidate.id === artistId) continue;
+    if (candidate.id === artistId || !candidate.series) continue;
     const candidateWorks = new Map();
     for (const row of candidate.series) if (row.year <= until) for (const [work, weight] of row.works) candidateWorks.set(work, (candidateWorks.get(work) || 0) + weight);
     let sharedWeight = 0;
@@ -331,12 +478,17 @@ function lodMatrixPixel(index, count, resolution, detailResolution) {
   const detailPixel = matrixPixel(index, count, detailResolution);
   return resolution === detailResolution ? detailPixel : matrixPixel(detailPixel, detailResolution, resolution);
 }
+function detailResolution(layer) {
+  const detail = tileManifest?.detail_resolution;
+  if (layer === 'artist') return Number(detail?.artist_y) || 1024;
+  return Number(detail?.work_y) || 4096;
+}
 function foldOverlayLinks(modeIndex, layer, links) {
   const tile = tileFor(modeIndex, layer), targetCount = layer === 'artist' ? data.artists.length : data.works.length, cells = new Map();
   for (const link of links) {
-    const source = data._artistsById.get(link.source), target = layer === 'artist' ? data._artistsById.get(link.target) : data._worksById.get(link.target);
+    const source = typeof link.source === 'number' ? {position: link.source} : data._artistsById.get(link.source), target = typeof link.target === 'number' ? {position: link.target, index: link.target} : layer === 'artist' ? data._artistsById.get(link.target) : data._worksById.get(link.target);
     if (!source || !target) continue;
-    const x = lodMatrixPixel(source.position, data.artists.length, tile.width, 1024), y = lodMatrixPixel(layer === 'artist' ? target.position : target.index, targetCount, tile.height, layer === 'artist' ? 1024 : 4096), key = `${x}:${y}`, old = cells.get(key);
+    const x = lodMatrixPixel(source.position, data.artists.length, tile.width, Number(tileManifest?.detail_resolution?.x) || 1024), y = lodMatrixPixel(layer === 'artist' ? target.position : target.index, targetCount, tile.height, detailResolution(layer)), key = `${x}:${y}`, old = cells.get(key);
     cells.set(key, {x, y, weight: (old?.weight || 0) + link.weight});
   }
   return {tile, cells: [...cells.values()]};
@@ -389,7 +541,7 @@ function appendYearArrival(pulses, width, height) {
     const layout = geometry(width, height, data._lodModes[index].nodes.length);
     for (const layer of ['artist', 'work']) {
       const tile = tileFor(index, layer), yTop = layer === 'artist' ? layout.artistTop : layout.workTop, yBottom = layer === 'artist' ? layout.artistBottom : layout.workBottom;
-      for (const cells of yearDeltaColumns(index, layer, yearAnimation.yearIndex).values()) for (const cell of cells) {
+      for (const cell of yearArrivalCells(index, layer, yearAnimation.yearIndex)) {
         const intensity = Math.min(1, Math.log1p(cell.weight) / 2.8), x = layout.inset + (width - layout.inset * 2) * cell.x / Math.max(1, tile.width - 1), y = yTop + (yBottom - yTop) * cell.y / Math.max(1, tile.height - 1), size = (2.5 + Math.min(4.6, Math.sqrt(cell.weight) * .5)) * responsiveGlow;
         pulses.push(x, y, ...paletteColors.accent, (.045 + intensity * .07) * flare * opacity, size * 2.6, .94);
         pulses.push(x, y, ...paletteColors.bright, (.07 + intensity * .13) * flare * opacity, size, .52);
@@ -431,7 +583,11 @@ function appendYearPulse(points, pulseCandidates, width, height) {
   }
 }
 function renderPoints(points, pulses, width, height, viewScale) {
-  const pixelRatio = devicePixelRatio, stride = 8 * 4, background = paletteColors.paper; canvas.width = Math.round(width * pixelRatio); canvas.height = Math.round(height * pixelRatio); gl.viewport(0, 0, canvas.width, canvas.height); gl.clearColor(...background, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.useProgram(program); gl.bindBuffer(gl.ARRAY_BUFFER, pointBuffer); gl.enableVertexAttribArray(positionLoc); gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, stride, 0); gl.enableVertexAttribArray(colorLoc); gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, stride, 2 * 4); gl.enableVertexAttribArray(sizeLoc); gl.vertexAttribPointer(sizeLoc, 1, gl.FLOAT, false, stride, 6 * 4); gl.enableVertexAttribArray(softnessLoc); gl.vertexAttribPointer(softnessLoc, 1, gl.FLOAT, false, stride, 7 * 4); gl.uniform2f(uniforms.u_resolution, width, height); gl.uniform2f(uniforms.u_center, width / 2, height / 2); gl.uniform2f(uniforms.u_pan, cameraPan.x, cameraPan.y); gl.uniform1f(uniforms.u_scale, viewScale); gl.uniform1f(uniforms.u_pixel_ratio, pixelRatio); gl.enable(gl.BLEND);
+  const pixelRatio = Math.min(MAX_CANVAS_PIXEL_RATIO, devicePixelRatio || 1), stride = 8 * 4, background = paletteColors.paper, pixelWidth = Math.round(width * pixelRatio), pixelHeight = Math.round(height * pixelRatio);
+  // Assigning width/height reallocates the WebGL drawing buffer. During the
+  // timeline that used to happen on every frame; resize only when necessary.
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) { canvas.width = pixelWidth; canvas.height = pixelHeight; }
+  gl.viewport(0, 0, canvas.width, canvas.height); gl.clearColor(...background, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.useProgram(program); gl.bindBuffer(gl.ARRAY_BUFFER, pointBuffer); gl.enableVertexAttribArray(positionLoc); gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, stride, 0); gl.enableVertexAttribArray(colorLoc); gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, stride, 2 * 4); gl.enableVertexAttribArray(sizeLoc); gl.vertexAttribPointer(sizeLoc, 1, gl.FLOAT, false, stride, 6 * 4); gl.enableVertexAttribArray(softnessLoc); gl.vertexAttribPointer(softnessLoc, 1, gl.FLOAT, false, stride, 7 * 4); gl.uniform2f(uniforms.u_resolution, width, height); gl.uniform2f(uniforms.u_center, width / 2, height / 2); gl.uniform2f(uniforms.u_pan, cameraPan.x, cameraPan.y); gl.uniform1f(uniforms.u_scale, viewScale); gl.uniform1f(uniforms.u_pixel_ratio, pixelRatio); gl.enable(gl.BLEND);
   const drawPass = (values, additive) => { if (!values.length) return; gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(values), gl.DYNAMIC_DRAW); gl.blendFunc(gl.SRC_ALPHA, additive ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA); gl.drawArrays(gl.POINTS, 0, values.length / 8); };
   drawPass(points, false); drawPass(pulses, true);
 }
@@ -444,6 +600,7 @@ function draw() {
   const points = [], pulses = [], pulseCandidates = [], viewScale = cameraScale(); constrainPan(rect.width, rect.height); timeStates.forEach((timeState) => layers.forEach(({index, opacity}) => { const layerOpacity = opacity * timeState.opacity; appendLodLayer(points, index, layerOpacity, rect.width, rect.height, max, timeState.index); appendArtistOverlay(points, index, layerOpacity, rect.width, rect.height, max, timeState.index); })); appendYearArrival(pulses, rect.width, rect.height); appendYearPulse(pulses, pulseCandidates, rect.width, rect.height); renderPoints(points, pulses, rect.width, rect.height, viewScale); playPulseCandidates(pulseCandidates); playBassoContinuo();
 }
 function details(event) {
+  if (!data.works) return;
   if (selected === 'all') return;
   const detail = $('#detail'); if (!detail) return;
   const rect = canvas.getBoundingClientRect(), viewScale = cameraScale();
@@ -727,7 +884,7 @@ function setDisplayedYear(index) { $('#year').value = index; $('#year-value').te
 function stopYearAnimation(commit = true) {
   const pending = yearAnimation;
   if (pending && commit) { yearIndex = pending.yearIndex; setDisplayedYear(yearIndex); }
-  yearAnimation = undefined; if (animationFrame) cancelAnimationFrame(animationFrame); animationFrame = undefined;
+  yearAnimation = undefined; cancelTilePrefetch(); if (animationFrame) cancelAnimationFrame(animationFrame); animationFrame = undefined;
   setPlaybackControl(false);
   if (pending && commit) draw();
 }
@@ -740,13 +897,14 @@ function setAnimationSpeed() {
 }
 function beginYearAnimation(targetIndex) {
   yearAnimation = {yearIndex: targetIndex, startedAt: performance.now(), duration: animationDuration(), dissolveDuration: 260, soundedPulses: new Set(), soundedBasso: new Set(), lastToneAt: -Infinity};
-  setDisplayedYear(targetIndex); weaveClack(); draw();
+  setDisplayedYear(targetIndex); weaveClack(); draw(); scheduleTilePrefetch(targetIndex);
 }
 function animateYear() {
   draw();
   if (!yearAnimation) return;
   if (performance.now() - yearAnimation.startedAt < yearAnimation.duration + yearAnimation.dissolveDuration) { animationFrame = requestAnimationFrame(animateYear); return; }
   yearIndex = yearAnimation.yearIndex;
+  discardTimelineTiles(Math.max(0, yearIndex));
   if (requestedArtwork) {
     if (loopArtworkYear) { beginYearAnimation(yearIndex); animationFrame = requestAnimationFrame(animateYear); return; }
     stopYearAnimation(false); update(); return;
@@ -775,7 +933,7 @@ function moveDrag(event) { if (!dragState) return; cameraPan.x = dragState.panX 
 function endDrag(event) { if (!dragState) return; const moved = dragState.moved; dragState = undefined; canvas.classList.remove('is-panning'); if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId); if (moved) { ignoreNextClick = true; selectedLink = undefined; } }
 async function toggleFullscreen() {
   if (document.fullscreenElement === canvas.parentElement) await document.exitFullscreen();
-  else { await loadTileSet(WIDE_OVERVIEW_KEY); await canvas.parentElement.requestFullscreen({navigationUI: 'hide'}); }
+  else { await loadTileSet(ULTRA_OVERVIEW_KEY); await canvas.parentElement.requestFullscreen({navigationUI: 'hide'}); }
 }
 function loadPreferredTiles() {
   if (!tileManifest) return;
@@ -784,7 +942,7 @@ function loadPreferredTiles() {
 function syncFullscreenControl() {
   const active = document.fullscreenElement === canvas.parentElement;
   setFullscreenControl(active); setFullscreenChromeVisible(false);
-  draw();
+  loadPreferredTiles();
 }
 function setFullscreenChromeVisible(visible) {
   const wrap = canvas.parentElement;
@@ -836,6 +994,14 @@ function setPalette(id) {
 async function loadTiles() {
   setLoadingStatus('Loading woven tiles');
   const base = '/public/data/woven-tiles', manifest = await fetch(`${base}/manifest.json?v=${DATASET_VERSION}`).then((response) => response.json()); tileManifest = manifest;
+  // The module is intentionally small and has no DOM/WebGL access. It only
+  // folds temporal deltas into render cells; WebGL remains the renderer.
+  try {
+    const response = await fetch('/src/wasm/woven-aggregate.wasm');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const module = await WebAssembly.instantiate(await response.arrayBuffer(), {});
+    aggregateWasm = module.instance.exports;
+  } catch (error) { console.warn('WOVEN Wasm aggregation is unavailable; using the compatible JS path.', error); }
   await loadTileSet(preferredTileKey());
 }
 async function loadTileSet(lod) {
@@ -869,6 +1035,7 @@ async function configureArtworkRoute() {
   if (!entry) throw new Error('This Artist is not in the public WOVEN artwork collection.');
   const artist = data._artistsById.get(entry.classiiId);
   if (!artist) throw new Error('The requested Artist is unavailable in this dataset.');
+  await ensureArtistDetail(artist.id);
   const nearestYear = data.years.reduce((best, candidate) => Math.abs(candidate - requestedArtwork.year) < Math.abs(best - requestedArtwork.year) ? candidate : best, data.years[0]);
   selected = artist.id; $('#artist').value = artist.id; yearIndex = data.years.indexOf(nearestYear); $('#year').value = yearIndex;
   clearOverlayCaches(); document.body.classList.add('artwork-route'); setupArtworkPlayback();
@@ -918,6 +1085,10 @@ async function setupFeaturedArtistSelector() {
 async function init() { setLoadingStatus('Loading relationship library'); const response = await fetch(`/public/data/woven-sample.json?v=${DATASET_VERSION}`); if (!response.ok) throw new Error(`Unable to load the WOVEN library: HTTP ${response.status}`); data = await response.json(); await loadTiles(); setLoadingStatus('Arranging the cultural fabric'); prepareLod(); const select = $('#artist'); data.artists.forEach((artist) => { const option = document.createElement('option'); option.value = artist.id; option.textContent = artist.name; select.append(option); }); const year = $('#year'), zoom = $('#zoom'), speed = $('#animation-speed'), instrument = $('#glow-instrument'), glowControl = $('#glow-volume'), reverbControl = $('#reverb-amount'), clack = $('#weave-clack'), clackControl = $('#clack-volume'), paletteControl = $('#palette'); setLoadingStatus('Preparing sound and controls'); await Promise.all([loadInstrumentCatalog(instrument), loadWaveCatalog(clack)]); year.min = 0; year.max = data.years.length - 1; year.value = yearIndex = data.years.length - 1; zoom.value = lodIndex; glowInstrument = instrument.value; weaveClackId = clack.value; setChannelVolume('glow', Number(glowControl.value)); setReverbAmount(Number(reverbControl.value)); setChannelVolume('clack', Number(clackControl.value)); setAnimationSpeed(); setCanvasYearVisibility(true); $('#zoom-value').textContent = zoomLabel(); year.addEventListener('input', () => { stopYearAnimation(); yearIndex = Number(year.value); selectedLink = undefined; update(); }); select.addEventListener('change', () => { stopYearAnimation(); selected = select.value; clearOverlayCaches(); selectedLink = undefined; update(); }); paletteControl.addEventListener('change', () => setPalette(paletteControl.value)); $('#play-years').addEventListener('click', playYears); speed.addEventListener('input', setAnimationSpeed); $('#canvas-year-toggle').addEventListener('click', toggleCanvasYearVisibility); glowControl.addEventListener('input', () => setChannelVolume('glow', Number(glowControl.value))); reverbControl.addEventListener('input', () => setChannelVolume('glow', Number(reverbControl.value))); clackControl.addEventListener('input', () => setChannelVolume('clack', Number(clackControl.value))); instrument.addEventListener('change', () => { glowInstrument = instrument.value; const context = soundContext(); if (context && instrumentCatalog.has(glowInstrument)) loadInstrumentPack(glowInstrument, context).catch((error) => console.warn('Unable to load glow instrument', error)); }); clack.addEventListener('change', () => { weaveClackId = clack.value; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); $('#fullscreen').addEventListener('click', toggleFullscreen); $('#drawer-toggle').addEventListener('click', toggleControlDrawer); document.addEventListener('fullscreenchange', syncFullscreenControl); document.addEventListener('keydown', playbackShortcut); zoom.addEventListener('input', () => setCameraZoom(Number(zoom.value), zoom)); $('#sound').addEventListener('click', () => { sound = !sound; $('#sound').setAttribute('aria-pressed', sound); $('#sound').textContent = sound ? 'Sound on' : 'Sound off'; const context = soundContext(); if (context) loadWeaveClack(context).catch((error) => console.warn('Unable to load weave clack', error)); }); canvas.addEventListener('click', (event) => { if (ignoreNextClick) { ignoreNextClick = false; return; } details(event); }); canvas.addEventListener('pointerdown', beginDrag); canvas.addEventListener('pointermove', moveDrag); canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('wheel', (event) => zoomFromWheel(event, zoom), {passive: false}); window.addEventListener('resize', draw); setPalette(paletteControl.value); }
 canvas.parentElement.addEventListener('pointermove', revealFullscreenChrome);
 window.addEventListener('resize', loadPreferredTiles);
+// The canvas can change size without a viewport resize (for example when a
+// mobile browser changes its chrome). Choose against this element, not merely
+// the browser window.
+new ResizeObserver(loadPreferredTiles).observe(canvas);
 canvas.parentElement.addEventListener('pointerdown', revealTouchPlayer);
 canvas.parentElement.addEventListener('focusin', () => { if (document.fullscreenElement === canvas.parentElement) setFullscreenChromeVisible(true); });
 function setupArtistSearch() {
@@ -927,7 +1098,7 @@ function setupArtistSearch() {
   const render = () => {
     const query = normalise(input.value.trim());
     if (!query) { results.hidden = true; input.setAttribute('aria-expanded', 'false'); clear(); return; }
-    const matches = data.artists.filter((artist) => normalise(artist.name).includes(query)).slice(0, 12);
+    const matches = data.artists.filter((artist) => artist.detailAvailable && normalise(artist.name).includes(query)).slice(0, 12);
     results.replaceChildren(...matches.map((artist) => { const button = document.createElement('button'); button.type = 'button'; button.role = 'option'; button.textContent = artist.name; button.addEventListener('click', () => choose(artist)); return button; }));
     results.hidden = !matches.length; input.setAttribute('aria-expanded', String(matches.length > 0));
   };
@@ -935,7 +1106,19 @@ function setupArtistSearch() {
   input.addEventListener('keydown', (event) => { if (event.key === 'Escape') { results.hidden = true; input.setAttribute('aria-expanded', 'false'); } if (event.key === 'Enter') { const exact = data.artists.find((artist) => normalise(artist.name) === normalise(input.value)); if (exact) { event.preventDefault(); choose(exact); } } });
   input.addEventListener('blur', () => setTimeout(() => { results.hidden = true; input.setAttribute('aria-expanded', 'false'); }, 120));
 }
-init().then(async () => {
+async function initRuntime() {
+  const response = await fetch(`${RUNTIME_INDEX_URL}?v=${DATASET_VERSION}`);
+  if (!response.ok) throw new Error(`Unable to load the WOVEN index: HTTP ${response.status}`);
+  const index = await response.json();
+  // Reuse the established control/audio setup. During that setup, substitute
+  // the old monolithic request with the compact runtime index exactly once.
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input, options) => String(input).includes('/public/data/woven-sample.json')
+    ? Promise.resolve(new Response(JSON.stringify(index), {headers: {'Content-Type': 'application/json'}}))
+    : nativeFetch(input, options);
+  try { await init(); } finally { window.fetch = nativeFetch; }
+}
+initRuntime().then(async () => {
   await configureArtworkRoute();
   Object.keys(PALETTE_EDITOR_ROLES).forEach((role) => {
     $(`#color-${role}`).addEventListener('input', (event) => setPaletteEditorColor(role, event.target.value));
@@ -954,6 +1137,11 @@ init().then(async () => {
   // for non-visual controls elsewhere in the app.
   $('#sound').addEventListener('click', () => queueMicrotask(() => setSoundControl(sound)));
   setupArtistSearch();
+  $('#artist').addEventListener('change', async () => {
+    if (selected === 'all') return;
+    await ensureArtistDetail(selected);
+    update();
+  });
   setTouchPlayerVisibility(false);
   setLoadingStatus('Ready');
   completeLoading();

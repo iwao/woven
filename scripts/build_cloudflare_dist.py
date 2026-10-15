@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import subprocess
 from pathlib import Path
 
 
@@ -15,6 +16,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Create the Cloudflare Assets bundle for WOVEN.")
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
     args = parser.parse_args()
+    # The compiled module is tracked as a static application asset, so normal
+    # deployment does not require a Rust toolchain. Rebuild it explicitly with
+    # scripts/build_wasm.sh after changing wasm/woven_aggregate.rs.
+    wasm = ROOT / "src" / "wasm" / "woven-aggregate.wasm"
+    if not wasm.exists():
+        subprocess.run([str(ROOT / "scripts" / "build_wasm.sh")], check=True)
     if args.output.exists():
         shutil.rmtree(args.output)
     args.output.mkdir(parents=True)
